@@ -651,7 +651,13 @@ def api_audio_config():
 # ============================================================
 
 class AudioStreamManager:
-    """Manages bidirectional audio streaming between browser and sound card."""
+    """Manages bidirectional audio streaming between browser and sound card.
+    Uses Opus codec: 16kHz mono, ~24 kbit/s, 20ms frames."""
+    
+    SAMPLE_RATE = 16000
+    CHANNELS = 1
+    FRAME_SIZE = 320  # 20ms @ 16kHz = 320 samples
+    FRAME_BYTES = 640  # 320 samples * 2 bytes (16-bit)
     
     def __init__(self):
         self.tx_active = False
@@ -660,6 +666,12 @@ class AudioStreamManager:
         self._capture_process = None
         self._capture_thread = None
         self._running = False
+        
+        # Opus encoder for RX (radio → browser)
+        import opuslib
+        self.opus_encoder = opuslib.Encoder(self.SAMPLE_RATE, self.CHANNELS, opuslib.APPLICATION_VOIP)
+        self.opus_decoder = opuslib.Decoder(self.SAMPLE_RATE, self.CHANNELS)
+        logger.info("Audio: Opus codec initialized (16kHz mono, VOIP mode)")
     
     def start_tx(self):
         """Start TX: prepare to receive mic audio from browser."""
@@ -672,10 +684,43 @@ class AudioStreamManager:
         logger.info("Audio TX stopped")
     
     def handle_tx_audio(self, data):
-        """Handle incoming audio from browser, play to sound card."""
-        # For now: log. Full implementation would decode opus and play via ALSA.
-        # Using aplay subprocess or pyalsaaudio
-        pass
+        """Handle incoming Opus audio from browser, decode and play to sound card."""
+        if not self.tx_active:
+            return
+        try:
+            import base64
+            import numpy as np
+            
+            opus_data = base64.b64decode(data.get('data', ''))
+            if not opus_data:
+                return
+            
+            # Decode Opus → PCM
+            pcm = self.opus_decoder.decode(opus_data, self.FRAME_SIZE)
+            
+            # Play to sound card
+            if not SIMULATE and audio_playback_dev:
+                # Write PCM to aplay subprocess
+                if not hasattr(self, '_playback_proc') or self._playback_proc is None:
+                    cmd = [
+                        'aplay',
+                        '-D', audio_playback_dev,
+                        '-f', 'S16_LE',
+                        '-c', '1',
+                        '-r', str(self.SAMPLE_RATE),
+                        '-t', 'raw'
+                    ]
+                    self._playback_proc = subprocess.Popen(
+                        cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE
+                    )
+                try:
+                    self._playback_proc.stdin.write(pcm)
+                    self._playback_proc.stdin.flush()
+                except BrokenPipeError:
+                    logger.warning("aplay pipe broken, restarting")
+                    self._playback_proc = None
+        except Exception as e:
+            logger.error(f"TX audio error: {e}")
     
     def start_rx_stream(self, client_sid):
         """Start streaming RX audio to a browser client."""
@@ -685,7 +730,7 @@ class AudioStreamManager:
             self._running = True
             self._capture_thread = threading.Thread(target=self._rx_capture_loop, daemon=True)
             self._capture_thread.start()
-            logger.info("Audio RX stream started")
+            logger.info("Audio RX stream started (Opus)")
     
     def stop_rx_stream(self, client_sid):
         """Stop streaming to a specific client."""
@@ -696,41 +741,50 @@ class AudioStreamManager:
             logger.info("Audio RX stream stopped (no clients)")
     
     def _rx_capture_loop(self):
-        """Capture audio from sound card and stream to clients."""
+        """Capture audio from sound card, encode to Opus, stream to clients."""
         import base64
         
         while self._running:
             try:
                 if SIMULATE:
-                    # Simulate silence with occasional noise
                     eventlet.sleep(0.02)  # 20ms frames
-                    # Generate a tiny silence frame for testing
-                    silence = b'\x00' * 640  # 20ms @ 16kHz 16-bit mono
-                    encoded = base64.b64encode(silence).decode()
+                    # Simulate silence frame
+                    silence = b'\x00' * self.FRAME_BYTES
+                    opus_frame = self.opus_encoder.encode(silence, self.FRAME_SIZE)
+                    encoded = base64.b64encode(opus_frame).decode()
                     for sid in list(self.rx_clients):
-                        socketio.emit('audio_tx', {'data': encoded, 'codec': 'pcm'}, room=sid)
+                        socketio.emit('audio_tx', {
+                            'data': encoded,
+                            'codec': 'opus',
+                            'sampleRate': self.SAMPLE_RATE
+                        }, room=sid)
                 else:
                     # Real capture via arecord
                     device = audio_capture_dev or 'default'
                     cmd = [
                         'arecord',
                         '-D', device,
-                        '-f', 'S16_LE',   # 16-bit signed
-                        '-c', '1',         # Mono
-                        '-r', '16000',     # 16 kHz
+                        '-f', 'S16_LE',
+                        '-c', '1',
+                        '-r', str(self.SAMPLE_RATE),
                         '-t', 'raw'
                     ]
                     self._capture_process = subprocess.Popen(
                         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
                     )
                     
-                    chunk_size = 640  # 20ms @ 16kHz 16-bit = 640 bytes
                     while self._running and self._capture_process.poll() is None:
-                        chunk = self._capture_process.stdout.read(chunk_size)
-                        if len(chunk) == chunk_size:
-                            encoded = base64.b64encode(chunk).decode()
+                        chunk = self._capture_process.stdout.read(self.FRAME_BYTES)
+                        if len(chunk) == self.FRAME_BYTES:
+                            # Encode PCM → Opus
+                            opus_frame = self.opus_encoder.encode(chunk, self.FRAME_SIZE)
+                            encoded = base64.b64encode(opus_frame).decode()
                             for sid in list(self.rx_clients):
-                                socketio.emit('audio_tx', {'data': encoded, 'codec': 'pcm'}, room=sid)
+                                socketio.emit('audio_tx', {
+                                    'data': encoded,
+                                    'codec': 'opus',
+                                    'sampleRate': self.SAMPLE_RATE
+                                }, room=sid)
                     
                     if self._capture_process.poll() is not None:
                         logger.warning("arecord process died, restarting...")
@@ -744,6 +798,9 @@ class AudioStreamManager:
         if self._capture_process and self._capture_process.poll() is None:
             self._capture_process.terminate()
             self._capture_process = None
+        if hasattr(self, '_playback_proc') and self._playback_proc:
+            self._playback_proc.terminate()
+            self._playback_proc = None
 
 
 audio_stream_manager = AudioStreamManager()

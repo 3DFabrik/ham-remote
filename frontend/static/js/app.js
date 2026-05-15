@@ -268,9 +268,27 @@ class UVK5Remote {
         // Audio streaming
         this.audioContext = null;
         this.micStream = null;
-        this.audioProcessor = null;
+        this.mediaRecorder = null;
+        this.opusDecoder = null;
         this.rxAudioQueue = [];
         this.rxPlaying = false;
+        
+        // Initialize Opus decoder for RX playback
+        this._initOpusDecoder();
+    }
+    
+    async _initOpusDecoder() {
+        try {
+            if (typeof OpusDecoder !== 'undefined') {
+                this.opusDecoder = new OpusDecoder();
+                await this.opusDecoder.ready;
+                console.log('Opus decoder initialized');
+            } else {
+                console.warn('Opus decoder library not loaded, RX will use PCM fallback');
+            }
+        } catch (err) {
+            console.warn('Opus decoder init failed:', err);
+        }
     }
     
     // ============================================================
@@ -394,34 +412,34 @@ class UVK5Remote {
                 }
             });
             
-            const source = this.audioContext.createMediaStreamSource(this.micStream);
-            this.audioProcessor = this.audioContext.createScriptProcessor(2048, 1, 1);
+            // Use MediaRecorder with Opus codec
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                ? 'audio/webm;codecs=opus'
+                : 'audio/ogg;codecs=opus';
             
-            this.audioProcessor.onaudioprocess = (e) => {
-                if (!this.pttActive) return;
-                const pcm = e.inputBuffer.getChannelData(0);
-                // Convert Float32 to Int16 PCM
-                const int16 = new Int16Array(pcm.length);
-                for (let i = 0; i < pcm.length; i++) {
-                    const s = Math.max(-1, Math.min(1, pcm[i]));
-                    int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            this.mediaRecorder = new MediaRecorder(this.micStream, {
+                mimeType: mimeType,
+                audioBitsPerSecond: 24000  // 24 kbit/s
+            });
+            
+            this.mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0 && this.pttActive) {
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const base64 = reader.result.split(',')[1];
+                        this.socket.emit('audio_rx', {
+                            data: base64,
+                            codec: 'opus-webm',
+                            sampleRate: 16000
+                        });
+                    };
+                    reader.readAsDataURL(e.data);
                 }
-                // Send as base64
-                const bytes = new Uint8Array(int16.buffer);
-                let binary = '';
-                for (let i = 0; i < bytes.length; i++) {
-                    binary += String.fromCharCode(bytes[i]);
-                }
-                this.socket.emit('audio_rx', {
-                    data: btoa(binary),
-                    codec: 'pcm',
-                    sampleRate: 16000
-                });
             };
             
-            source.connect(this.audioProcessor);
-            this.audioProcessor.connect(this.audioContext.destination);
-            console.log('Microphone streaming started');
+            // Send in 20ms chunks (Opus frame size)
+            this.mediaRecorder.start(20);
+            console.log('Microphone streaming started (Opus, 24kbit/s)');
             
         } catch (err) {
             console.error('Microphone access denied:', err);
@@ -429,9 +447,9 @@ class UVK5Remote {
     }
     
     stopMicrophone() {
-        if (this.audioProcessor) {
-            this.audioProcessor.disconnect();
-            this.audioProcessor = null;
+        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+            this.mediaRecorder.stop();
+            this.mediaRecorder = null;
         }
         if (this.micStream) {
             this.micStream.getTracks().forEach(t => t.stop());
@@ -439,34 +457,54 @@ class UVK5Remote {
         }
     }
     
-    playRxAudio(pcmBase64) {
+    playRxAudio(data) {
         if (!this.audioContext) return;
         
         try {
-            // Decode base64 to Int16 PCM
-            const binary = atob(pcmBase64);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) {
-                bytes[i] = binary.charCodeAt(i);
+            if (data.codec === 'opus') {
+                // Raw Opus frame from backend
+                // Decode via AudioContext + custom decoder
+                const binary = atob(data.data);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) {
+                    bytes[i] = binary.charCodeAt(i);
+                }
+                
+                // Decode Opus → PCM using the Web Audio API workaround
+                // For raw opus we need a decoder - use the opus-decoder library
+                // Fallback: if opus-decoder not loaded, skip
+                if (this.opusDecoder) {
+                    this.opusDecoder.decodeFrame(bytes).then(pcm => {
+                        this._playPcmFloat(pcm);
+                    });
+                }
+            } else if (data.codec === 'pcm') {
+                // Raw PCM fallback
+                const binary = atob(data.data);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) {
+                    bytes[i] = binary.charCodeAt(i);
+                }
+                const int16 = new Int16Array(bytes.buffer);
+                const float32 = new Float32Array(int16.length);
+                for (let i = 0; i < int16.length; i++) {
+                    float32[i] = int16[i] / 0x8000;
+                }
+                this._playPcmFloat(float32);
             }
-            const int16 = new Int16Array(bytes.buffer);
-            
-            // Convert to Float32 for AudioContext
-            const float32 = new Float32Array(int16.length);
-            for (let i = 0; i < int16.length; i++) {
-                float32[i] = int16[i] / 0x8000;
-            }
-            
-            const buffer = this.audioContext.createBuffer(1, float32.length, 16000);
-            buffer.copyToChannel(float32, 0);
-            
-            const source = this.audioContext.createBufferSource();
-            source.buffer = buffer;
-            source.connect(this.audioContext.destination);
-            source.start();
         } catch (err) {
             console.error('RX audio playback error:', err);
         }
+    }
+    
+    _playPcmFloat(float32Array) {
+        if (!this.audioContext) return;
+        const buffer = this.audioContext.createBuffer(1, float32Array.length, 16000);
+        buffer.copyToChannel(float32Array, 0);
+        const source = this.audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.audioContext.destination);
+        source.start();
     }
     
     // ============================================================
