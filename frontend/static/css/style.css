@@ -1,0 +1,431 @@
+/* ============================================================
+   UV-K5 Remote - Stylesheet
+   Mobile-first, dark theme, designed for touch operation
+   ============================================================ */
+
+:root {
+    --bg-dark: #0a0a0a;
+    --bg-card: #1a1a1a;
+    --bg-card-hover: #222;
+    --accent: #00d4aa;
+    --accent-dim: #00a080;
+    --accent-glow: rgba(0, 212, 170, 0.3);
+    --danger: #ff4444;
+    --danger-glow: rgba(255, 68, 68, 0.4);
+    --text: #e0e0e0;
+    --text-dim: #888;
+    --text-bright: #fff;
+    --border: #333;
+    --radius: 12px;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg-dark);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#app {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    gap: 16px;
+}
+
+/* Header */
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+}
+
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.header-left h1 {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-dim);
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.status-dot.connected {
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent-glow);
+}
+
+.status-dot.disconnected {
+    background: #555;
+}
+
+/* Frequency Display */
+.freq-section {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    padding: 20px;
+    text-align: center;
+}
+
+.freq-display {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.freq-mhz {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 56px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 2px;
+    text-shadow: 0 0 20px var(--accent-glow);
+    line-height: 1;
+}
+
+.freq-unit {
+    font-size: 18px;
+    color: var(--text-dim);
+    font-weight: 500;
+}
+
+.freq-label {
+    font-size: 14px;
+    color: var(--text-dim);
+    margin-bottom: 16px;
+}
+
+/* Frequency digit controls */
+.freq-digits {
+    display: flex;
+    justify-content: center;
+    gap: 4px;
+    margin-bottom: 16px;
+}
+
+.freq-digit {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+
+.freq-digit .digit-up,
+.freq-digit .digit-down {
+    width: 36px;
+    height: 28px;
+    border: 1px solid var(--border);
+    background: var(--bg-dark);
+    color: var(--text-dim);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.freq-digit .digit-up:active,
+.freq-digit .digit-down:active {
+    background: var(--accent-dim);
+    color: var(--text-bright);
+}
+
+.freq-digit .digit-value {
+    font-family: 'SF Mono', monospace;
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--text-bright);
+    width: 36px;
+    text-align: center;
+    line-height: 1.2;
+}
+
+.freq-digit.separator {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    padding: 0 2px;
+}
+
+/* Quick frequency buttons */
+.quick-freqs {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+}
+
+.btn-freq {
+    padding: 8px 16px;
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.btn-freq:active {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+}
+
+/* Controls */
+.controls-section {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    padding: 16px;
+}
+
+.control-row {
+    display: flex;
+    justify-content: space-around;
+    gap: 12px;
+}
+
+.control-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.control-group label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+}
+
+.stepper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.btn-step {
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--border);
+    background: var(--bg-dark);
+    color: var(--text);
+    border-radius: 8px;
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.btn-step:active {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+}
+
+.stepper span {
+    font-family: 'SF Mono', monospace;
+    font-size: 20px;
+    font-weight: 600;
+    min-width: 24px;
+    text-align: center;
+}
+
+.btn-toggle {
+    padding: 8px 16px;
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.btn-toggle:active {
+    background: var(--accent-dim);
+}
+
+.btn-toggle.high {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: var(--text-bright);
+}
+
+/* PTT Button */
+.ptt-section {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px 0;
+}
+
+.btn-ptt {
+    width: 160px;
+    height: 160px;
+    border-radius: 50%;
+    border: 4px solid var(--accent);
+    background: var(--bg-card);
+    color: var(--accent);
+    font-size: 28px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    transition: all 0.15s;
+    touch-action: none;
+    -webkit-touch-callout: none;
+}
+
+.btn-ptt .ptt-label {
+    font-size: 32px;
+}
+
+.btn-ptt .ptt-hint {
+    font-size: 12px;
+    color: var(--text-dim);
+    font-weight: 400;
+}
+
+.btn-ptt.active {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: var(--text-bright);
+    box-shadow: 0 0 30px var(--danger-glow);
+}
+
+.btn-ptt.active .ptt-hint {
+    color: rgba(255,255,255,0.7);
+}
+
+/* Settings */
+.settings-section {
+    margin-bottom: 16px;
+}
+
+.settings-toggle {
+    width: 100%;
+    padding: 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    text-align: left;
+}
+
+.settings-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-top: 8px;
+}
+
+.setting-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.setting-row label {
+    font-size: 13px;
+    color: var(--text-dim);
+    min-width: 80px;
+}
+
+.setting-row select {
+    flex: 1;
+    padding: 6px 8px;
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+}
+
+.btn-small {
+    padding: 6px 10px;
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.btn-connect {
+    flex: 1;
+    padding: 8px;
+    background: var(--accent-dim);
+    border: none;
+    border-radius: 8px;
+    color: var(--text-bright);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.btn-disconnect {
+    flex: 1;
+    padding: 8px;
+    background: transparent;
+    border: 1px solid var(--danger);
+    border-radius: 8px;
+    color: var(--danger);
+    font-size: 14px;
+    cursor: pointer;
+}
+
+/* Responsive adjustments */
+@media (max-height: 700px) {
+    .freq-mhz { font-size: 44px; }
+    .btn-ptt { width: 130px; height: 130px; }
+    .btn-ptt .ptt-label { font-size: 26px; }
+}
+
+@media (min-width: 768px) {
+    #app { padding: 20px; }
+    .freq-mhz { font-size: 64px; }
+}
