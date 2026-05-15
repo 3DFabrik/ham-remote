@@ -70,6 +70,59 @@ body {
     width: 32px;
 }
 
+/* Tabs */
+.tabs {
+    display: flex;
+    background: var(--bg-dark);
+    border-bottom: 2px solid var(--border);
+}
+
+.tab {
+    flex: 1;
+    padding: 10px 16px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
+    transition: color 0.2s, border-color 0.2s;
+}
+
+.tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+.tab:hover:not(.active) {
+    color: var(--text-primary);
+}
+
+/* Tab content */
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Setup section */
+.setup-section {
+    padding: 16px;
+}
+
+.setup-heading {
+    font-size: 14px;
+    color: var(--accent);
+    margin: 0 0 12px 0;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+}
+
 .header-right {
     display: flex;
     align-items: center;
@@ -343,30 +396,6 @@ body {
 }
 
 /* Settings */
-.settings-section {
-    margin-bottom: 16px;
-}
-
-.settings-toggle {
-    width: 100%;
-    padding: 10px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-dim);
-    font-size: 14px;
-    cursor: pointer;
-    text-align: left;
-}
-
-.settings-panel {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px;
-    margin-top: 8px;
-}
-
 .setting-row {
     display: flex;
     align-items: center;

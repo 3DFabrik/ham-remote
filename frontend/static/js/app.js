@@ -86,8 +86,6 @@ class UVK5Remote {
             sqValue: document.getElementById('sq-value'),
             volValue: document.getElementById('vol-value'),
             powerToggle: document.getElementById('power-toggle'),
-            settingsToggle: document.getElementById('settings-toggle'),
-            settingsPanel: document.getElementById('settings-panel'),
             portSelect: document.getElementById('port-select'),
             radioTypeSelect: document.getElementById('radio-type'),
             simulateToggle: document.getElementById('simulate-toggle'),
@@ -233,10 +231,6 @@ class UVK5Remote {
     }
     
     setupSettings() {
-        // Toggle settings panel
-        this.els.settingsToggle.addEventListener('click', () => {
-            const panel = this.els.settingsPanel;
-            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
         });
         
         // Refresh ports
@@ -259,6 +253,16 @@ class UVK5Remote {
         
         // Radio type
         this.els.radioTypeSelect.addEventListener('change', () => this.setRadioType());
+        
+        // Tabs
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            });
+        });
         
         // Load ports, audio devices, and radio types on open
         this.refreshPorts();
