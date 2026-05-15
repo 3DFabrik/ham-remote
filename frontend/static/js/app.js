@@ -16,6 +16,7 @@ class UVK5Remote {
         this.audioContext = null;
         this.mediaStream = null;
         this.audioProcessor = null;
+        this.pttHotkey = localStorage.getItem('ptt_hotkey') || 'Space';
         
         this.init();
     }
@@ -193,14 +194,14 @@ class UVK5Remote {
         
         // Keyboard shortcut (spacebar)
         document.addEventListener('keydown', (e) => {
-            if (e.code === 'Space' && !e.repeat) {
+            if (e.code === this.pttHotkey && !e.repeat) {
                 e.preventDefault();
                 this.pttOn();
             }
         });
         
         document.addEventListener('keyup', (e) => {
-            if (e.code === 'Space') {
+            if (e.code === this.pttHotkey) {
                 e.preventDefault();
                 this.pttOff();
             }
@@ -231,8 +232,6 @@ class UVK5Remote {
     }
     
     setupSettings() {
-        });
-        
         // Refresh ports
         this.els.btnRefreshPorts.addEventListener('click', () => this.refreshPorts());
         
@@ -263,6 +262,13 @@ class UVK5Remote {
                 document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
             });
         });
+        
+        // PTT Hotkey
+        this.els.hotkeyBtn = document.getElementById('ptt-hotkey-btn');
+        this.els.hotkeyHint = document.getElementById('hotkey-hint');
+        this.els.hotkeyBtn.textContent = this.pttHotkey;
+        
+        this.els.hotkeyBtn.addEventListener('click', () => this.startHotkeyListen());
         
         // Load ports, audio devices, and radio types on open
         this.refreshPorts();
@@ -723,6 +729,49 @@ class UVK5Remote {
         } catch (err) {
             console.error('Set radio type error:', err);
         }
+    }
+    
+    // ============================================================
+    // PTT Hotkey
+    // ============================================================
+    
+    startHotkeyListen() {
+        this.els.hotkeyBtn.textContent = '...';
+        this.els.hotkeyBtn.classList.add('listening');
+        this.els.hotkeyHint.textContent = 'Jetzt Taste drücken';
+        
+        const handler = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            // Ignore modifier-only presses
+            if (['ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight'].includes(e.code)) {
+                return;
+            }
+            
+            this.pttHotkey = e.code;
+            localStorage.setItem('ptt_hotkey', e.code);
+            
+            // Friendly name
+            const name = e.code
+                .replace('Key', '')
+                .replace('Digit', '')
+                .replace('Numpad', 'Num ')
+                .replace('Space', 'Space')
+                .replace('ArrowUp', '↑')
+                .replace('ArrowDown', '↓')
+                .replace('ArrowLeft', '←')
+                .replace('ArrowRight', '→');
+            
+            this.els.hotkeyBtn.textContent = name;
+            this.els.hotkeyBtn.classList.remove('listening');
+            this.els.hotkeyHint.textContent = 'Klicken dann Taste drücken';
+            
+            document.removeEventListener('keydown', handler, true);
+            console.log(`PTT hotkey set to ${e.code}`);
+        };
+        
+        document.addEventListener('keydown', handler, true);
     }
 }
 

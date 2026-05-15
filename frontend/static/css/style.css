@@ -542,6 +542,37 @@ body {
     opacity: 0.6;
 }
 
+/* Hotkey button */
+.btn-hotkey {
+    padding: 8px 20px;
+    background: var(--bg-dark);
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    color: var(--accent);
+    font-family: monospace;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    min-width: 100px;
+    transition: border-color 0.2s;
+}
+
+.btn-hotkey.listening {
+    border-color: var(--accent);
+    animation: pulse-border 1s infinite;
+}
+
+@keyframes pulse-border {
+    0%, 100% { border-color: var(--accent); }
+    50% { border-color: transparent; }
+}
+
+.hotkey-hint {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-left: 8px;
+}
+
 /* Responsive adjustments */
 @media (max-height: 700px) {
     .freq-mhz { font-size: 44px; }
