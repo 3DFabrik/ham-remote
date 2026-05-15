@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>UV-K5 Remote</title>
+    <title>HAM Remote</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <link rel="icon" href="/static/img/logo.svg" type="image/svg+xml">
 </head>
@@ -12,8 +12,8 @@
         <!-- Header -->
         <header class="header">
             <div class="header-left">
-                <span class="logo">📻</span>
-                <h1>UV-K5 Remote</h1>
+                <img src="/static/img/logo.svg" class="header-logo" alt="HAM Remote">
+                <h1>HAM Remote</h1>
             </div>
             <div class="header-right">
                 <span id="status-indicator" class="status-dot disconnected" title="Disconnected"></span>
@@ -42,6 +42,28 @@
                 <button class="btn-freq" data-freq="145.500" title="2m Calling">CQ</button>
                 <button class="btn-freq" data-freq="145.375" title="Relais DB0Kö">R1</button>
                 <button class="btn-freq" data-freq="145.575" title="Relais DB0OV">R2</button>
+            </div>
+        </section>
+
+            <!-- S-Meter -->
+            <div class="smeter-section">
+                <div class="smeter-labels">
+                    <span>S1</span>
+                    <span>S3</span>
+                    <span>S5</span>
+                    <span>S7</span>
+                    <span>S9</span>
+                    <span class="smeter-plus">+20</span>
+                    <span class="smeter-plus">+40</span>
+                    <span class="smeter-plus">+60</span>
+                </div>
+                <div class="smeter-bar">
+                    <div class="smeter-fill" id="smeter-fill">
+                        <div class="smeter-needle" id="smeter-needle"></div>
+                    </div>
+                    <div class="smeter-s9-mark"></div>
+                </div>
+                <div class="smeter-value" id="smeter-value">S0</div>
             </div>
         </section>
 
@@ -86,6 +108,12 @@
             </button>
             <div class="settings-panel" id="settings-panel" style="display:none;">
                 <div class="setting-row">
+                    <label>Transceiver</label>
+                    <select id="radio-type">
+                        <option value="uvk5">Quansheng UV-K5</option>
+                    </select>
+                </div>
+                <div class="setting-row">
                     <label>Serial Port</label>
                     <select id="port-select">
                         <option value="">Auto-detect</option>
@@ -121,6 +149,10 @@
                 </div>
             </div>
         </section>
+        <!-- Footer -->
+        <footer class="footer">
+            <span class="footer-text">Made by Norbot 🤖</span>
+        </footer>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>

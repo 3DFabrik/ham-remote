@@ -56,6 +56,13 @@ class UVK5Remote {
             this.updateFromRadio(data);
         });
         
+        this.socket.on('audio_tx', (data) => {
+            // Incoming audio from radio RX
+            if (data.data && data.codec === 'pcm') {
+                this.playRxAudio(data.data);
+            }
+        });
+        
         // Initial status fetch
         fetch('/api/status')
             .then(r => r.json())
@@ -82,10 +89,14 @@ class UVK5Remote {
             settingsToggle: document.getElementById('settings-toggle'),
             settingsPanel: document.getElementById('settings-panel'),
             portSelect: document.getElementById('port-select'),
+            radioTypeSelect: document.getElementById('radio-type'),
             simulateToggle: document.getElementById('simulate-toggle'),
             btnConnect: document.getElementById('btn-connect'),
             btnDisconnect: document.getElementById('btn-disconnect'),
             btnRefreshPorts: document.getElementById('btn-refresh-ports'),
+            smeterFill: document.getElementById('smeter-fill'),
+            smeterNeedle: document.getElementById('smeter-needle'),
+            smeterValue: document.getElementById('smeter-value'),
         };
     }
     
@@ -246,9 +257,20 @@ class UVK5Remote {
         this.els.audioPlayback.addEventListener('change', () => this.setAudioConfig());
         this.els.audioCapture.addEventListener('change', () => this.setAudioConfig());
         
-        // Load ports and audio devices on open
+        // Radio type
+        this.els.radioTypeSelect.addEventListener('change', () => this.setRadioType());
+        
+        // Load ports, audio devices, and radio types on open
         this.refreshPorts();
         this.refreshAudioDevices();
+        this.refreshRadioTypes();
+        
+        // Audio streaming
+        this.audioContext = null;
+        this.micStream = null;
+        this.audioProcessor = null;
+        this.rxAudioQueue = [];
+        this.rxPlaying = false;
     }
     
     // ============================================================
@@ -301,6 +323,7 @@ class UVK5Remote {
         this.pttActive = true;
         this.els.pttButton.classList.add('active');
         
+        this.socket.emit('audio_stop_rx');  // Stop RX while transmitting
         this.socket.emit('ptt_press');
         this.startMicrophone();
     }
@@ -312,6 +335,7 @@ class UVK5Remote {
         
         this.socket.emit('ptt_release');
         this.stopMicrophone();
+        this.socket.emit('audio_start_rx');  // Resume RX after transmitting
     }
     
     setSquelch(level) {
@@ -349,29 +373,99 @@ class UVK5Remote {
     }
     
     // ============================================================
-    // Audio (Microphone for TX)
+    // Audio (Microphone for TX, Speaker for RX)
     // ============================================================
     
     async startMicrophone() {
         try {
-            this.mediaStream = await navigator.mediaDevices.getUserMedia({
+            if (!this.audioContext) {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: 16000
+                });
+            }
+            
+            this.micStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
-                    autoGainControl: true
+                    autoGainControl: true,
+                    channelCount: 1,
+                    sampleRate: 16000
                 }
             });
-            console.log('Microphone activated');
-            // TODO: Stream audio data to server via WebSocket
+            
+            const source = this.audioContext.createMediaStreamSource(this.micStream);
+            this.audioProcessor = this.audioContext.createScriptProcessor(2048, 1, 1);
+            
+            this.audioProcessor.onaudioprocess = (e) => {
+                if (!this.pttActive) return;
+                const pcm = e.inputBuffer.getChannelData(0);
+                // Convert Float32 to Int16 PCM
+                const int16 = new Int16Array(pcm.length);
+                for (let i = 0; i < pcm.length; i++) {
+                    const s = Math.max(-1, Math.min(1, pcm[i]));
+                    int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+                // Send as base64
+                const bytes = new Uint8Array(int16.buffer);
+                let binary = '';
+                for (let i = 0; i < bytes.length; i++) {
+                    binary += String.fromCharCode(bytes[i]);
+                }
+                this.socket.emit('audio_rx', {
+                    data: btoa(binary),
+                    codec: 'pcm',
+                    sampleRate: 16000
+                });
+            };
+            
+            source.connect(this.audioProcessor);
+            this.audioProcessor.connect(this.audioContext.destination);
+            console.log('Microphone streaming started');
+            
         } catch (err) {
             console.error('Microphone access denied:', err);
         }
     }
     
     stopMicrophone() {
-        if (this.mediaStream) {
-            this.mediaStream.getTracks().forEach(t => t.stop());
-            this.mediaStream = null;
+        if (this.audioProcessor) {
+            this.audioProcessor.disconnect();
+            this.audioProcessor = null;
+        }
+        if (this.micStream) {
+            this.micStream.getTracks().forEach(t => t.stop());
+            this.micStream = null;
+        }
+    }
+    
+    playRxAudio(pcmBase64) {
+        if (!this.audioContext) return;
+        
+        try {
+            // Decode base64 to Int16 PCM
+            const binary = atob(pcmBase64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            const int16 = new Int16Array(bytes.buffer);
+            
+            // Convert to Float32 for AudioContext
+            const float32 = new Float32Array(int16.length);
+            for (let i = 0; i < int16.length; i++) {
+                float32[i] = int16[i] / 0x8000;
+            }
+            
+            const buffer = this.audioContext.createBuffer(1, float32.length, 16000);
+            buffer.copyToChannel(float32, 0);
+            
+            const source = this.audioContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(this.audioContext.destination);
+            source.start();
+        } catch (err) {
+            console.error('RX audio playback error:', err);
         }
     }
     
@@ -410,6 +504,8 @@ class UVK5Remote {
             if (data.success) {
                 this.updateConnectionStatus(true);
                 console.log('Radio connected' + (data.simulated ? ' (simulated)' : ''));
+                // Start RX audio stream
+                this.socket.emit('audio_start_rx');
             }
         } catch (err) {
             console.error('Connect error:', err);
@@ -419,6 +515,7 @@ class UVK5Remote {
     async disconnectRadio() {
         try {
             await fetch('/api/disconnect', { method: 'POST' });
+            this.socket.emit('audio_stop_rx');
             this.updateConnectionStatus(false);
         } catch (err) {
             console.error('Disconnect error:', err);
@@ -456,6 +553,35 @@ class UVK5Remote {
         if (data.connected !== undefined) {
             this.updateConnectionStatus(data.connected || data.simulated);
         }
+        if (data.smeter !== undefined) {
+            this.updateSMeter(data.smeter);
+        }
+    }
+    
+    // ============================================================
+    // S-Meter
+    // ============================================================
+    
+    updateSMeter(value) {
+        // value: 0-9 = S0-S9, 10-12 = +20/+40/+60
+        // Map to percentage: S0=0%, S9=56%, +60=100%
+        const pct = Math.min(100, (value / 12) * 100);
+        this.els.smeterFill.style.width = pct + '%';
+        
+        // Format display text
+        let text;
+        if (value === 0) {
+            text = 'S0';
+            this.els.smeterValue.className = 'smeter-value no-signal';
+        } else if (value <= 9) {
+            text = 'S' + value;
+            this.els.smeterValue.className = 'smeter-value';
+        } else {
+            const db = (value - 9) * 20;
+            text = 'S9+' + db;
+            this.els.smeterValue.className = 'smeter-value s9-plus';
+        }
+        this.els.smeterValue.textContent = text;
     }
     // ============================================================
     // Audio Device Management
@@ -508,6 +634,52 @@ class UVK5Remote {
             console.log('Audio config saved');
         } catch (err) {
             console.error('Set audio config error:', err);
+        }
+    }
+    
+    // ============================================================
+    // Radio Type Management
+    // ============================================================
+    
+    async refreshRadioTypes() {
+        try {
+            const resp = await fetch('/api/radio-types');
+            const types = await resp.json();
+            
+            this.els.radioTypeSelect.innerHTML = '';
+            types.forEach(t => {
+                const opt = document.createElement('option');
+                opt.value = t.id;
+                opt.textContent = t.label;
+                opt.title = t.description;
+                this.els.radioTypeSelect.appendChild(opt);
+            });
+            
+            // Load current selection
+            const currentResp = await fetch('/api/radio-type');
+            const current = await currentResp.json();
+            if (current.type) this.els.radioTypeSelect.value = current.type;
+            
+        } catch (err) {
+            console.error('Radio types error:', err);
+        }
+    }
+    
+    async setRadioType() {
+        const type = this.els.radioTypeSelect.value;
+        try {
+            const resp = await fetch('/api/radio-type', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type })
+            });
+            const result = await resp.json();
+            if (result.success) {
+                console.log(`Switched to ${result.label}`);
+                this.refreshPorts(); // Ports may differ
+            }
+        } catch (err) {
+            console.error('Set radio type error:', err);
         }
     }
 }

@@ -35,6 +35,23 @@ logging.basicConfig(
 logger = logging.getLogger('uvk5-remote')
 
 # ============================================================
+# Radio Driver Registry
+# ============================================================
+
+RADIO_DRIVERS = {}
+
+
+def register_radio(name, label, description, baud_rate, cls):
+    """Register a radio driver."""
+    RADIO_DRIVERS[name] = {
+        'label': label,
+        'description': description,
+        'baud_rate': baud_rate,
+        'cls': cls
+    }
+
+
+# ============================================================
 # UV-K5 Serial Protocol
 # Based on QuanshengDock reverse-engineered protocol
 # ============================================================
@@ -61,6 +78,7 @@ class UVK5Radio:
         self.volume = 5
         self.tx_power = 'LOW'  # LOW=1W, HIGH=5W
         self.rssi = 0
+        self.smeter_value = 0  # 0=S0, 1-9=S1-S9, 10=+20, 11=+40, 12=+60
         self._lock = threading.Lock()
         self._monitor_thread = None
         self._running = False
@@ -158,6 +176,7 @@ class UVK5Radio:
             'volume': self.volume,
             'tx_power': self.tx_power,
             'rssi': self.rssi,
+            'smeter': self.smeter_value,
             'timestamp': datetime.now().isoformat()
         }
     
@@ -210,10 +229,16 @@ class UVK5Radio:
         """Background thread to poll radio status."""
         while self._running:
             try:
-                if self.connected:
-                    # Poll RSSI and other status
-                    # TODO: Implement actual status polling
+                if self.connected and not SIMULATE:
+                    # Poll S-Meter / signal strength from radio
+                    # Yaesu CAT: read S-meter via specific command
+                    # UV-K5: read RSSI from serial
+                    # TODO: Implement actual polling per radio type
                     pass
+                elif self.connected and SIMULATE:
+                    # Simulate gentle S-meter fluctuation
+                    import random
+                    self.smeter_value = random.choice([3, 4, 5, 5, 6, 6, 7])
                 eventlet.sleep(1.0)
             except Exception as e:
                 logger.error(f"Monitor error: {e}")
@@ -221,7 +246,112 @@ class UVK5Radio:
 
 
 # ============================================================
-# Web Application
+# Yaesu FT-7800/8300 CAT Protocol
+# Standard Yaesu CAT over 9600 baud serial
+# ============================================================
+
+class YaesuCATRadio(UVK5Radio):
+    """Interface for Yaesu FT-7800/FT-8300 via CAT protocol."""
+    
+    BAUD_RATE = 9600
+    
+    # Yaesu CAT commands
+    CMD_FREQ_SET = b'\x00\x00\x00\x00'  # Placeholder - 4-byte BCD frequency
+    CMD_FREQ_READ = b'\x03'              # Read frequency
+    CMD_MODE_SET = b'\x07'              # Set mode
+    CMD_PTT_ON = b'\x08'                # PTT On
+    CMD_PTT_OFF = b'\x88'               # PTT Off
+    CMD_GET_STATUS = b'\xFA'            # Read status
+    CMD_GET_SMETER = b'\xF7'            # Read S-meter
+    
+    def __init__(self, port=None):
+        super().__init__(port)
+        self.current_mode = 'FM'
+    
+    def connect(self, port=None):
+        """Connect to Yaesu via serial."""
+        if port:
+            self.port = port
+        if not self.port:
+            return False
+        try:
+            self.serial = serial.Serial(
+                port=self.port,
+                baudrate=self.BAUD_RATE,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_TWO,
+                timeout=2
+            )
+            self.connected = True
+            logger.info(f"Connected to Yaesu on {self.port} at {self.BAUD_RATE} baud")
+            self._running = True
+            self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+            self._monitor_thread.start()
+            return True
+        except serial.SerialException as e:
+            logger.error(f"Failed to connect to Yaesu: {e}")
+            self.connected = False
+            return False
+    
+    def _send_cat(self, cmd):
+        """Send a CAT command and read response."""
+        if not self.serial or not self.serial.is_open:
+            return None
+        with self._lock:
+            try:
+                self.serial.reset_input_buffer()
+                self.serial.write(cmd)
+                response = self.serial.read(5)
+                return response
+            except serial.SerialException as e:
+                logger.error(f"Yaesu CAT error: {e}")
+                self.connected = False
+                return None
+    
+    def set_frequency(self, freq_mhz):
+        """Set frequency using Yaesu BCD format."""
+        # Convert MHz to 10Hz units, then to 4-byte BCD
+        freq_10hz = int(freq_mhz * 100000)
+        bcd = freq_10hz.to_bytes(4, 'big')
+        self._send_cat(bcd)
+        self.current_freq = freq_mhz
+    
+    def set_ptt(self, active):
+        """PTT via CAT command."""
+        if active:
+            self._send_cat(self.CMD_PTT_ON)
+        else:
+            self._send_cat(self.CMD_PTT_OFF)
+        self.ptt_active = active
+    
+    def _monitor_loop(self):
+        """Background thread polling Yaesu status."""
+        while self._running:
+            try:
+                if self.connected and not SIMULATE:
+                    resp = self._send_cat(self.CMD_GET_SMETER)
+                    if resp and len(resp) >= 2:
+                        # Yaesu returns S-meter as 2-byte value
+                        raw = resp[1] if len(resp) > 1 else resp[0]
+                        # Map 0-255 to S0-S9+60
+                        if raw < 10:
+                            self.smeter_value = 0
+                        elif raw < 30:
+                            self.smeter_value = 1 + int((raw - 10) / 4)
+                        elif raw < 120:
+                            self.smeter_value = 3 + int((raw - 30) / 15)
+                        elif raw < 200:
+                            self.smeter_value = 9
+                        else:
+                            self.smeter_value = min(12, 10 + int((raw - 200) / 27))
+                elif self.connected and SIMULATE:
+                    import random
+                    self.smeter_value = random.choice([3, 4, 5, 5, 6, 6, 7])
+                eventlet.sleep(1.0)
+            except Exception as e:
+                logger.error(f"Yaesu monitor error: {e}")
+                eventlet.sleep(5.0)
 # ============================================================
 
 app = Flask(__name__, 
@@ -231,8 +361,13 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'uvk5-remote-dev-key')
 
 socketio = SocketIO(app, cors_allowed_origins='*', async_mode='eventlet')
 
+# Register all radio drivers
+register_radio('uvk5', 'Quansheng UV-K5', 'Via AIOC cable, 38400 baud', 38400, UVK5Radio)
+register_radio('yaesu-ft', 'Yaesu FT-7800/8300', 'CAT protocol, 9600 baud, RS232', 9600, YaesuCATRadio)
+
 # Global radio instance
 radio = UVK5Radio()
+current_radio_type = 'uvk5'
 
 # Simulated mode for development without hardware
 SIMULATE = os.environ.get('UVK5_SIMULATE', 'true').lower() == 'true'
@@ -240,6 +375,67 @@ SIMULATE = os.environ.get('UVK5_SIMULATE', 'true').lower() == 'true'
 # Active audio devices
 audio_playback_dev = os.environ.get('AUDIO_PLAYBACK', None)
 audio_capture_dev = os.environ.get('AUDIO_CAPTURE', None)
+
+
+def background_status_push():
+    """Periodically push status updates to all connected clients."""
+    while True:
+        if radio.connected:
+            socketio.emit('radio_update', radio.get_status())
+        eventlet.sleep(2.0)
+
+
+# Start background push thread
+eventlet.spawn(background_status_push)
+
+
+@app.route('/api/radio-types')
+def api_radio_types():
+    """List available radio types."""
+    types = []
+    for key, info in RADIO_DRIVERS.items():
+        types.append({
+            'id': key,
+            'label': info['label'],
+            'description': info['description'],
+            'baud_rate': info['baud_rate']
+        })
+    return jsonify(types)
+
+
+@app.route('/api/radio-type', methods=['GET', 'POST'])
+def api_radio_type():
+    """Get or set the current radio type."""
+    global radio, current_radio_type
+    
+    if request.method == 'GET':
+        info = RADIO_DRIVERS.get(current_radio_type, {})
+        return jsonify({
+            'type': current_radio_type,
+            'label': info.get('label', ''),
+            'description': info.get('description', '')
+        })
+    
+    data = request.json or {}
+    new_type = data.get('type')
+    
+    if new_type not in RADIO_DRIVERS:
+        return jsonify({'success': False, 'error': f'Unknown radio type: {new_type}'}), 400
+    
+    if new_type == current_radio_type:
+        return jsonify({'success': True, 'type': current_radio_type})
+    
+    # Disconnect current radio
+    if radio.connected:
+        radio.disconnect()
+    
+    # Create new instance
+    driver_info = RADIO_DRIVERS[new_type]
+    radio = driver_info['cls']()
+    current_radio_type = new_type
+    
+    logger.info(f"Switched radio type to {driver_info['label']}")
+    return jsonify({'success': True, 'type': current_radio_type, 'label': driver_info['label']})
 
 
 @app.route('/')
@@ -262,6 +458,7 @@ def api_status():
             'volume': radio.volume,
             'tx_power': radio.tx_power,
             'rssi': -87,
+            'smeter': 5,  # Simulated: S5
             'timestamp': datetime.now().isoformat()
         })
     return jsonify(radio.get_status())
@@ -448,6 +645,110 @@ def api_audio_config():
     })
 
 
+# ============================================================
+# Audio Stream Manager
+# WebSocket + Opus, 16kHz Mono
+# ============================================================
+
+class AudioStreamManager:
+    """Manages bidirectional audio streaming between browser and sound card."""
+    
+    def __init__(self):
+        self.tx_active = False
+        self.rx_active = False
+        self.rx_clients = set()
+        self._capture_process = None
+        self._capture_thread = None
+        self._running = False
+    
+    def start_tx(self):
+        """Start TX: prepare to receive mic audio from browser."""
+        self.tx_active = True
+        logger.info("Audio TX started")
+    
+    def stop_tx(self):
+        """Stop TX."""
+        self.tx_active = False
+        logger.info("Audio TX stopped")
+    
+    def handle_tx_audio(self, data):
+        """Handle incoming audio from browser, play to sound card."""
+        # For now: log. Full implementation would decode opus and play via ALSA.
+        # Using aplay subprocess or pyalsaaudio
+        pass
+    
+    def start_rx_stream(self, client_sid):
+        """Start streaming RX audio to a browser client."""
+        self.rx_clients.add(client_sid)
+        if not self.rx_active:
+            self.rx_active = True
+            self._running = True
+            self._capture_thread = threading.Thread(target=self._rx_capture_loop, daemon=True)
+            self._capture_thread.start()
+            logger.info("Audio RX stream started")
+    
+    def stop_rx_stream(self, client_sid):
+        """Stop streaming to a specific client."""
+        self.rx_clients.discard(client_sid)
+        if not self.rx_clients:
+            self.rx_active = False
+            self._running = False
+            logger.info("Audio RX stream stopped (no clients)")
+    
+    def _rx_capture_loop(self):
+        """Capture audio from sound card and stream to clients."""
+        import base64
+        
+        while self._running:
+            try:
+                if SIMULATE:
+                    # Simulate silence with occasional noise
+                    eventlet.sleep(0.02)  # 20ms frames
+                    # Generate a tiny silence frame for testing
+                    silence = b'\x00' * 640  # 20ms @ 16kHz 16-bit mono
+                    encoded = base64.b64encode(silence).decode()
+                    for sid in list(self.rx_clients):
+                        socketio.emit('audio_tx', {'data': encoded, 'codec': 'pcm'}, room=sid)
+                else:
+                    # Real capture via arecord
+                    device = audio_capture_dev or 'default'
+                    cmd = [
+                        'arecord',
+                        '-D', device,
+                        '-f', 'S16_LE',   # 16-bit signed
+                        '-c', '1',         # Mono
+                        '-r', '16000',     # 16 kHz
+                        '-t', 'raw'
+                    ]
+                    self._capture_process = subprocess.Popen(
+                        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                    )
+                    
+                    chunk_size = 640  # 20ms @ 16kHz 16-bit = 640 bytes
+                    while self._running and self._capture_process.poll() is None:
+                        chunk = self._capture_process.stdout.read(chunk_size)
+                        if len(chunk) == chunk_size:
+                            encoded = base64.b64encode(chunk).decode()
+                            for sid in list(self.rx_clients):
+                                socketio.emit('audio_tx', {'data': encoded, 'codec': 'pcm'}, room=sid)
+                    
+                    if self._capture_process.poll() is not None:
+                        logger.warning("arecord process died, restarting...")
+                        eventlet.sleep(1)
+                        
+            except Exception as e:
+                logger.error(f"RX capture error: {e}")
+                eventlet.sleep(1)
+        
+        # Cleanup
+        if self._capture_process and self._capture_process.poll() is None:
+            self._capture_process.terminate()
+            self._capture_process = None
+
+
+audio_stream_manager = AudioStreamManager()
+
+
 # WebSocket events for real-time updates
 
 @socketio.on('connect')
@@ -459,12 +760,16 @@ def ws_connect():
 @socketio.on('ptt_press')
 def ws_ptt_press():
     radio.set_ptt(True)
+    if audio_stream_manager:
+        audio_stream_manager.start_tx()
     emit('radio_update', radio.get_status(), broadcast=True)
 
 
 @socketio.on('ptt_release')
 def ws_ptt_release():
     radio.set_ptt(False)
+    if audio_stream_manager:
+        audio_stream_manager.stop_tx()
     emit('radio_update', radio.get_status(), broadcast=True)
 
 
@@ -478,9 +783,39 @@ def ws_set_frequency(data):
 
 @socketio.on('audio_rx')
 def ws_audio_rx(data):
-    """Receive audio from browser microphone and forward to radio."""
-    # TODO: Forward audio data to AIOC sound card
-    pass
+    """Receive audio from browser microphone and forward to playback device."""
+    # Audio data comes as base64-encoded opus frames
+    # Forward to the selected playback device (radio's audio input)
+    if audio_stream_manager and audio_stream_manager.tx_active:
+        audio_stream_manager.handle_tx_audio(data)
+
+
+@socketio.on('audio_start_tx')
+def ws_audio_start_tx():
+    """Browser starts transmitting audio."""
+    if audio_stream_manager:
+        audio_stream_manager.start_tx()
+
+
+@socketio.on('audio_stop_tx')
+def ws_audio_stop_tx():
+    """Browser stops transmitting audio."""
+    if audio_stream_manager:
+        audio_stream_manager.stop_tx()
+
+
+@socketio.on('audio_start_rx')
+def ws_audio_start_rx():
+    """Browser wants to receive audio stream."""
+    if audio_stream_manager:
+        audio_stream_manager.start_rx_stream(request.sid)
+
+
+@socketio.on('audio_stop_rx')
+def ws_audio_stop_rx():
+    """Browser stops receiving audio."""
+    if audio_stream_manager:
+        audio_stream_manager.stop_rx_stream(request.sid)
 
 
 @socketio.on('disconnect')

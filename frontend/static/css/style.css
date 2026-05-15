@@ -65,6 +65,11 @@ body {
     font-weight: 600;
 }
 
+.header-logo {
+    height: 32px;
+    width: 32px;
+}
+
 .header-right {
     display: flex;
     align-items: center;
@@ -422,6 +427,90 @@ body {
     border: none;
     border-top: 1px solid var(--border);
     margin: 12px 0;
+}
+
+/* S-Meter */
+.smeter-section {
+    padding: 8px 0 0;
+}
+
+.smeter-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 9px;
+    color: var(--text-dim);
+    padding: 0 4px;
+    margin-bottom: 2px;
+}
+
+.smeter-plus {
+    color: #ff8800;
+}
+
+.smeter-bar {
+    position: relative;
+    height: 12px;
+    background: var(--bg-dark);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+}
+
+.smeter-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 6px;
+    transition: width 0.3s ease-out, background 0.3s;
+    background: linear-gradient(90deg, #00d4aa 0%, #00d4aa 60%, #ffaa00 75%, #ff4444 100%);
+}
+
+.smeter-needle {
+    position: absolute;
+    right: -1px;
+    top: -2px;
+    width: 3px;
+    height: 16px;
+    background: var(--text-bright);
+    border-radius: 1px;
+    box-shadow: 0 0 4px rgba(255,255,255,0.5);
+}
+
+.smeter-s9-mark {
+    position: absolute;
+    left: 56%;
+    top: 0;
+    height: 100%;
+    width: 1px;
+    background: rgba(255,255,255,0.3);
+}
+
+.smeter-value {
+    text-align: center;
+    font-family: 'SF Mono', monospace;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent);
+    padding-top: 4px;
+}
+
+.smeter-value.s9-plus {
+    color: #ffaa00;
+}
+
+.smeter-value.no-signal {
+    color: var(--text-dim);
+}
+
+/* Footer */
+.footer {
+    text-align: center;
+    padding: 16px 0 8px;
+}
+
+.footer-text {
+    font-size: 12px;
+    color: var(--text-dim);
+    opacity: 0.6;
 }
 
 /* Responsive adjustments */
