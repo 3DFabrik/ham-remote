@@ -1,32 +1,48 @@
-# UV-K5 Remote
+# 📻 HAM Remote
 
-Web interface for remote operation of a Quansheng UV-K5 via AIOC (All-In-One-Cable).
+Web interface for remote operation of amateur radio transceivers from any browser. Mobile-first, dark theme, optimized for touch operation.
 
-## Status: 🚧 In Development (Grundgerüst)
+**Made by Norbot 🤖**
 
-### Current features
-- ✅ Web UI with frequency display and digit-by-digit tuning
-- ✅ PTT button (hold-to-talk, touch + spacebar)
-- ✅ Squelch / Volume / TX Power controls
-- ✅ Quick frequency buttons (DMR, Calling, Relais)
-- ✅ WebSocket real-time updates
-- ✅ Simulation mode (works without hardware)
-- ✅ Mobile-first dark theme
+![HAM Remote Screenshot](frontend/static/img/screenshot.png)
 
-### TODO
-- [ ] Audio streaming (RX from radio → browser)
-- [ ] Audio streaming (TX from browser microphone → radio)
-- [ ] Actual UV-K5 serial protocol implementation
-- [ ] PTT via AIOC CM108 HID endpoint
-- [ ] Frequency setting via serial command
-- [ ] RSSI / signal strength display
-- [ ] Authentication (login page)
-- [ ] HTTPS support
-- [ ] Raspberry Pi deployment
+## Features
+
+### 🎛️ Controls
+- Frequency display with digit-by-digit tuning
+- Squelch / Volume / TX Power controls
+- Quick frequency buttons (DMR, Calling, Relays)
+- Live S-Meter (S0 – S9+60, animated)
+
+### 🎙️ Audio
+- Bidirectional audio streaming (RX + TX)
+- Opus codec – only ~24 kbit/s, optimized for voice
+- Half-duplex: RX pauses during TX
+- Configurable audio devices (USB sound cards)
+
+### ⌨️ PTT
+- Hold-to-talk button (touch + mouse)
+- Configurable keyboard hotkey (default: Spacebar)
+- Persists across sessions
+
+### 📡 Multi-Transceiver Support
+- **Quanscheng UV-K5** – via AIOC cable, 38400 baud
+- **Yaesu FT-7800/FT-8300** – CAT protocol, 9600 baud, RS232
+- Radio driver registry – easy to add more radios
+
+### 🎨 UI
+- Tab navigation: Main (operation) + Setup (configuration)
+- Dark theme, mobile-first design
+- Transceiver and audio device selection in Setup tab
+- Responsive – works on phone, tablet, and desktop
 
 ## Quick Start
 
 ```bash
+# Clone
+git clone https://github.com/3DFabrik/ham-remote.git
+cd ham-remote
+
 # Install dependencies
 pip install -r requirements.txt
 
@@ -37,30 +53,66 @@ python backend/app.py
 UVK5_SIMULATE=false python backend/app.py
 ```
 
-Open http://localhost:8080 in your browser.
+Open **http://localhost:8080** in your browser.
 
 ## Hardware Setup
 
+### Yaesu FT-7800/8300
 ```
-[UV-K5] ←→ [AIOC] ←→ USB ←→ [Server / Pi]
-                                  ↕
-                              Web Browser (Handy)
+[FT-8300] ←RS232→ [USB Adapter] → [Server / Pi]
+[FT-8300] ←Audio→ [Behringer USB] → [Server / Pi]
+                                    ↕
+                                Web Browser (Phone)
 ```
 
-### Requirements
-- Quansheng UV-K5 with QuanshengDock firmware (0.32.21q)
-- AIOC (All-In-One-Cable) - github.com/skuep/AIOC
-- USB connection to server
-- 2m antenna
-- 12V power adapter for continuous operation
+### Quansheng UV-K5
+```
+[UV-K5] ←→ [AIOC] → USB → [Server / Pi]
+                            ↕
+                        Web Browser (Phone)
+```
 
 ## Architecture
 
 ```
-frontend/          - HTML/CSS/JS (browser)
-  static/css/      - Stylesheet (dark theme, mobile-first)
-  static/js/       - Frontend logic + WebSocket client
-  templates/       - Jinja2 templates
+frontend/
+  static/
+    css/style.css    - Dark theme stylesheet
+    js/app.js        - Frontend logic, WebSocket, Opus audio
+    img/logo.svg     - Logo
+  templates/
+    index.html       - Main page with tab navigation
 backend/
-  app.py           - Flask + SocketIO server + UV-K5 serial interface
+  app.py             - Flask + SocketIO + radio drivers + audio engine
+requirements.txt     - Python dependencies
 ```
+
+## Supported Radios
+
+| Radio | Connection | Protocol | Status |
+|-------|-----------|----------|--------|
+| Quansheng UV-K5 | AIOC USB | Serial 38400 baud | 🚧 In progress |
+| Yaesu FT-7800/8300 | RS232 adapter | CAT 9600 baud | 🚧 In progress |
+
+Adding a new radio: create a class extending `UVK5Radio`, register it with `register_radio()`.
+
+## Requirements
+
+- Python 3.10+
+- USB serial adapter (for CAT control)
+- USB sound card (for audio, e.g. Behringer UM2)
+- Browser with WebSocket support
+
+## Roadmap
+
+- [ ] Hardware testing with FT-8300 + Behringer audio interface
+- [ ] Authentication / login page
+- [ ] HTTPS (via Caddy reverse proxy)
+- [ ] Raspberry Pi Zero 2W deployment
+- [ ] More radio drivers (IC-7300, FT-991, etc.)
+- [ ] Memory channel management
+- [ ] Band scope / waterfall display
+
+## License
+
+MIT
