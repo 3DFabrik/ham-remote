@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-UV-K5 Remote Transceiver - Web Interface
-Control a Quansheng UV-K5 via AIOC (All-In-One-Cable) from a web browser.
+HAM Remote - Web Interface for Amateur Radio Transceivers
+Control Yaesu, Quansheng, and other radios from a web browser.
 
 Architecture:
 - Flask web server with WebSocket support (flask-socketio)
@@ -17,6 +17,7 @@ import os
 import sys
 import json
 import time
+import subprocess
 import threading
 import logging
 from datetime import datetime
@@ -236,6 +237,10 @@ radio = UVK5Radio()
 # Simulated mode for development without hardware
 SIMULATE = os.environ.get('UVK5_SIMULATE', 'true').lower() == 'true'
 
+# Active audio devices
+audio_playback_dev = os.environ.get('AUDIO_PLAYBACK', None)
+audio_capture_dev = os.environ.get('AUDIO_CAPTURE', None)
+
 
 @app.route('/')
 def index():
@@ -352,6 +357,95 @@ def api_ports():
         'manufacturer': p.manufacturer,
         'hwid': p.hwid
     } for p in ports])
+
+
+@app.route('/api/audio/devices')
+def api_audio_devices():
+    """List available audio devices (playback and capture)."""
+    devices = {'playback': [], 'capture': []}
+
+    try:
+        # Get playback devices
+        result = subprocess.run(['aplay', '-l'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                if line.startswith('card'):
+                    # Parse: card 0: NVidia [HDA NVidia], device 0: ALC889 Analog [ALC889 Analog]
+                    parts = line.split(':')
+                    if len(parts) >= 3:
+                        card_info = parts[0].strip()
+                        name = parts[1].strip()
+                        detail = parts[2].strip()
+                        # Extract card/device numbers
+                        import re
+                        match = re.search(r'card (\d+).*device (\d+)', card_info)
+                        if match:
+                            card_num = match.group(1)
+                            dev_num = match.group(2)
+                            hw_id = f"hw:{card_num},{dev_num}"
+                            devices['playback'].append({
+                                'id': hw_id,
+                                'name': name,
+                                'detail': detail,
+                                'card': int(card_num),
+                                'device': int(dev_num)
+                            })
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        logger.warning("aplay not available")
+
+    try:
+        # Get capture devices
+        result = subprocess.run(['arecord', '-l'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                if line.startswith('card'):
+                    parts = line.split(':')
+                    if len(parts) >= 3:
+                        card_info = parts[0].strip()
+                        name = parts[1].strip()
+                        detail = parts[2].strip()
+                        import re
+                        match = re.search(r'card (\d+).*device (\d+)', card_info)
+                        if match:
+                            card_num = match.group(1)
+                            dev_num = match.group(2)
+                            hw_id = f"hw:{card_num},{dev_num}"
+                            devices['capture'].append({
+                                'id': hw_id,
+                                'name': name,
+                                'detail': detail,
+                                'card': int(card_num),
+                                'device': int(dev_num)
+                            })
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        logger.warning("arecord not available")
+
+    return jsonify(devices)
+
+
+@app.route('/api/audio/config', methods=['GET', 'POST'])
+def api_audio_config():
+    """Get or set the active audio devices."""
+    global audio_playback_dev, audio_capture_dev
+
+    if request.method == 'GET':
+        return jsonify({
+            'playback': audio_playback_dev,
+            'capture': audio_capture_dev
+        })
+
+    data = request.json or {}
+    if 'playback' in data:
+        audio_playback_dev = data['playback']
+    if 'capture' in data:
+        audio_capture_dev = data['capture']
+
+    logger.info(f"Audio config: playback={audio_playback_dev}, capture={audio_capture_dev}")
+    return jsonify({
+        'success': True,
+        'playback': audio_playback_dev,
+        'capture': audio_capture_dev
+    })
 
 
 # WebSocket events for real-time updates

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="240" fill="#0a0a0a" stroke="#00d4aa" stroke-width="8"/>
+  
+  <!-- Radio body -->
+  <rect x="120" y="160" width="272" height="192" rx="16" fill="#1a1a1a" stroke="#00d4aa" stroke-width="4"/>
+  
+  <!-- Antenna -->
+  <line x1="200" y1="160" x2="170" y2="70" stroke="#00d4aa" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="170" cy="65" r="8" fill="#00d4aa"/>
+  
+  <!-- Speaker grille -->
+  <rect x="140" y="185" width="100" height="140" rx="8" fill="#0a0a0a" stroke="#333" stroke-width="2"/>
+  <line x1="150" y1="200" x2="230" y2="200" stroke="#333" stroke-width="1.5"/>
+  <line x1="150" y1="215" x2="230" y2="215" stroke="#333" stroke-width="1.5"/>
+  <line x1="150" y1="230" x2="230" y2="230" stroke="#333" stroke-width="1.5"/>
+  <line x1="150" y1="245" x2="230" y2="245" stroke="#333" stroke-width="1.5"/>
+  <line x1="150" y1="260" x2="230" y2="260" stroke="#333" stroke-width="1.5"/>
+  <line x1="150" y1="275" x2="230" y2="275" stroke="#333" stroke-width="1.5"/>
+  <line x1="150" y1="290" x2="230" y2="290" stroke="#333" stroke-width="1.5"/>
+  <line x1="150" y1="305" x2="230" y2="305" stroke="#333" stroke-width="1.5"/>
+  
+  <!-- Frequency display -->
+  <rect x="260" y="185" width="112" height="50" rx="6" fill="#001a14" stroke="#00d4aa" stroke-width="2"/>
+  <text x="316" y="218" text-anchor="middle" font-family="monospace" font-size="22" font-weight="bold" fill="#00d4aa">145.5</text>
+  
+  <!-- WiFi/Remote symbol -->
+  <g transform="translate(316, 270)">
+    <circle cx="0" cy="12" r="5" fill="#00d4aa"/>
+    <path d="M-12,4 A18,18 0 0,1 12,4" fill="none" stroke="#00d4aa" stroke-width="3" stroke-linecap="round"/>
+    <path d="M-22,-4 A30,30 0 0,1 22,-4" fill="none" stroke="#00d4aa" stroke-width="3" stroke-linecap="round" opacity="0.7"/>
+    <path d="M-32,-12 A42,42 0 0,1 32,-12" fill="none" stroke="#00d4aa" stroke-width="3" stroke-linecap="round" opacity="0.4"/>
+  </g>
+  
+  <!-- PTT button -->
+  <circle cx="290" cy="325" r="16" fill="#1a1a1a" stroke="#ff4444" stroke-width="3"/>
+  <text x="290" y="330" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="bold" fill="#ff4444">PTT</text>
+  
+  <!-- Knobs -->
+  <circle cx="350" cy="315" r="12" fill="#222" stroke="#555" stroke-width="2"/>
+  <circle cx="350" cy="315" r="3" fill="#00d4aa"/>
+  
+  <!-- Text -->
+  <text x="256" y="420" text-anchor="middle" font-family="sans-serif" font-size="36" font-weight="bold" fill="#00d4aa">HAM REMOTE</text>
+  <text x="256" y="450" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#555">Made by Norbot 🤖</text>
+</svg>

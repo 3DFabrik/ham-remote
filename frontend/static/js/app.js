@@ -237,8 +237,18 @@ class UVK5Remote {
         // Disconnect
         this.els.btnDisconnect.addEventListener('click', () => this.disconnectRadio());
         
-        // Load ports on open
+        // Audio devices
+        this.els.audioPlayback = document.getElementById('audio-playback');
+        this.els.audioCapture = document.getElementById('audio-capture');
+        this.els.btnRefreshAudio = document.getElementById('btn-refresh-audio');
+        
+        this.els.btnRefreshAudio.addEventListener('click', () => this.refreshAudioDevices());
+        this.els.audioPlayback.addEventListener('change', () => this.setAudioConfig());
+        this.els.audioCapture.addEventListener('change', () => this.setAudioConfig());
+        
+        // Load ports and audio devices on open
         this.refreshPorts();
+        this.refreshAudioDevices();
     }
     
     // ============================================================
@@ -447,9 +457,62 @@ class UVK5Remote {
             this.updateConnectionStatus(data.connected || data.simulated);
         }
     }
+    // ============================================================
+    // Audio Device Management
+    // ============================================================
+    
+    async refreshAudioDevices() {
+        try {
+            const resp = await fetch('/api/audio/devices');
+            const devices = await resp.json();
+            
+            // Populate playback dropdown
+            this.els.audioPlayback.innerHTML = '<option value="">Default</option>';
+            (devices.playback || []).forEach(dev => {
+                const opt = document.createElement('option');
+                opt.value = dev.id;
+                opt.textContent = dev.name + ' - ' + dev.detail;
+                this.els.audioPlayback.appendChild(opt);
+            });
+            
+            // Populate capture dropdown
+            this.els.audioCapture.innerHTML = '<option value="">Default</option>';
+            (devices.capture || []).forEach(dev => {
+                const opt = document.createElement('option');
+                opt.value = dev.id;
+                opt.textContent = dev.name + ' - ' + dev.detail;
+                this.els.audioCapture.appendChild(opt);
+            });
+            
+            // Load current config
+            const configResp = await fetch('/api/audio/config');
+            const config = await configResp.json();
+            if (config.playback) this.els.audioPlayback.value = config.playback;
+            if (config.capture) this.els.audioCapture.value = config.capture;
+            
+        } catch (err) {
+            console.error('Audio devices error:', err);
+        }
+    }
+    
+    async setAudioConfig() {
+        const playback = this.els.audioPlayback.value;
+        const capture = this.els.audioCapture.value;
+        
+        try {
+            await fetch('/api/audio/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ playback, capture })
+            });
+            console.log('Audio config saved');
+        } catch (err) {
+            console.error('Set audio config error:', err);
+        }
+    }
 }
 
 // Initialize on load
 document.addEventListener('DOMContentLoaded', () => {
-    window.uvk5 = new UVK5Remote();
+    window.hamRemote = new UVK5Remote();
 });

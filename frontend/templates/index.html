@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>UV-K5 Remote</title>
     <link rel="stylesheet" href="/static/css/style.css">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📻</text></svg>">
+    <link rel="icon" href="/static/img/logo.svg" type="image/svg+xml">
 </head>
 <body>
     <div id="app">
@@ -99,6 +99,25 @@
                 <div class="setting-row">
                     <button class="btn-connect" id="btn-connect">Connect</button>
                     <button class="btn-disconnect" id="btn-disconnect">Disconnect</button>
+                </div>
+
+                <!-- Audio Settings -->
+                <div class="settings-divider"></div>
+                <div class="setting-row">
+                    <label>🎵 Audio</label>
+                </div>
+                <div class="setting-row">
+                    <label>Playback</label>
+                    <select id="audio-playback">
+                        <option value="">Default</option>
+                    </select>
+                    <button class="btn-small" id="btn-refresh-audio">🔄</button>
+                </div>
+                <div class="setting-row">
+                    <label>Capture</label>
+                    <select id="audio-capture">
+                        <option value="">Default</option>
+                    </select>
                 </div>
             </div>
         </section>

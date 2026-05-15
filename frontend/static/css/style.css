@@ -418,6 +418,12 @@ body {
     cursor: pointer;
 }
 
+.settings-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 12px 0;
+}
+
 /* Responsive adjustments */
 @media (max-height: 700px) {
     .freq-mhz { font-size: 44px; }
