@@ -790,7 +790,7 @@ class AudioStreamManager:
                     for sid in list(self.rx_clients):
                         socketio.emit('audio_tx', {
                             'data': encoded,
-                            'codec': 'opus',
+                            'codec': 'pcm',
                             'sampleRate': self.SAMPLE_RATE
                         }, room=sid)
                 else:
