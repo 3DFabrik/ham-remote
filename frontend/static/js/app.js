@@ -124,11 +124,30 @@ class UVK5Remote {
         this._micMonitorActive = false;
         this._micMonitorRequested = false;
         
+        this.micStatusEl = document.getElementById('mic-status');
+        this.micBtnEl = document.getElementById('btn-mic-activate');
+        
+        // Check if we can access the mic at all
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            this._showMicStatus('⚠️ Mikrofon nicht verfügbar (HTTPS nötig)', true);
+            this._showMicButton();
+            this._levelMeterLoop();
+            return;
+        }
+        
+        if (!window.isSecureContext) {
+            this._showMicStatus('⚠️ Sichere Verbindung nötig (HTTPS oder localhost)', true);
+            this._showMicButton();
+            this._levelMeterLoop();
+            return;
+        }
+        
         // We need a user gesture to access the microphone.
         // Try on first click/touch anywhere on the page.
         const activateOnGesture = () => {
             if (!this._micMonitorActive && !this._micMonitorRequested) {
                 this._micMonitorRequested = true;
+                this._showMicStatus('🎤 Mikrofon wird aktiviert...');
                 this._startAlwaysOnMicMonitor();
             }
         };
@@ -139,8 +158,39 @@ class UVK5Remote {
         // Also try when PTT is pressed (guaranteed gesture)
         // (handled in pttOn)
         
+        // Show hint that mic needs activation
+        this._showMicStatus('Klicke irgendwo um Mikrofon zu aktivieren');
+        this._showMicButton();
+        
         // Start the level meter animation loop
         this._levelMeterLoop();
+    }
+    
+    _showMicStatus(msg, isError) {
+        if (this.micStatusEl) {
+            this.micStatusEl.textContent = msg;
+            this.micStatusEl.style.display = 'block';
+            if (isError) this.micStatusEl.style.color = 'var(--danger)';
+        }
+    }
+    
+    _hideMicStatus() {
+        if (this.micStatusEl) this.micStatusEl.style.display = 'none';
+        if (this.micBtnEl) this.micBtnEl.style.display = 'none';
+    }
+    
+    _showMicButton() {
+        if (this.micBtnEl) {
+            this.micBtnEl.style.display = 'inline-block';
+            this.micBtnEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (!this._micMonitorActive) {
+                    this._micMonitorRequested = true;
+                    this._showMicStatus('🎤 Mikrofon wird aktiviert...');
+                    this._startAlwaysOnMicMonitor();
+                }
+            });
+        }
     }
     
     async _startAlwaysOnMicMonitor() {
@@ -175,10 +225,19 @@ class UVK5Remote {
             // Don't connect to destination – just for metering
             
             this._micMonitorActive = true;
+            this._hideMicStatus();
             console.log('Always-on mic monitor started (TX level meter)');
         } catch (err) {
             console.warn('Mic monitor not available:', err.message);
             this._micMonitorRequested = false; // Allow retry
+            if (err.name === 'NotAllowedError') {
+                this._showMicStatus('⚠️ Mikrofon-Zugriff verweigert. Browser-Einstellungen prüfen.', true);
+            } else if (err.name === 'NotFoundError') {
+                this._showMicStatus('⚠️ Kein Mikrofon gefunden.', true);
+            } else {
+                this._showMicStatus('⚠️ Mikrofon-Fehler: ' + err.message, true);
+            }
+            this._showMicButton();
         }
     }
     
