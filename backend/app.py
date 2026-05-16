@@ -566,9 +566,9 @@ class XieguX6100Radio(UVK5Radio):
             logger.warning(f"X6100 set freq no response")
     
     def _freq_to_civ_bcd(self, freq_hz):
-        """Convert Hz to CI-V BCD (5 bytes, LSB first, 10Hz units)."""
-        freq_10hz = freq_hz // 10
-        digits = f"{freq_10hz:010d}"  # 10 digits for 5 bytes
+        """Convert Hz to CI-V BCD (5 bytes, LSB first)."""
+        # CI-V uses Hz directly (not 10Hz units!)
+        digits = f"{freq_hz:010d}"  # 10 digits for 5 bytes
         # Pack as BCD MSB-first, then reverse bytes for CI-V LSB-first
         bcd_msb = b''
         for i in range(5):
@@ -584,7 +584,7 @@ class XieguX6100Radio(UVK5Radio):
         digits = ''
         for b in msb:
             digits += f'{(b >> 4) & 0x0F}{b & 0x0F}'
-        return int(digits) * 10
+        return int(digits)  # Already in Hz, not 10Hz units!
     
     def get_frequency(self):
         """Read current frequency from X6100."""
