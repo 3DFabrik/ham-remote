@@ -178,15 +178,63 @@ class UVK5Remote {
         const fillEl = this.els[channel + 'BarFill'];
         const dbEl = this.els[channel + 'Db'];
         const clipEl = this.els[channel + 'Clip'];
+        const peakEl = document.getElementById(channel + '-peak');
         
         if (!fillEl) return;
         
-        // Map dB to percentage: -60dB = 0%, 0dB = 100% (horizontal width)
+        // Map dB to percentage: -60dB = 0%, 0dB = 100%
         const pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+        
+        // Determine if this channel is actively transmitting
+        const isTX = channel === 'tx';
+        const isActive = isTX ? this.pttActive : true; // RX/RF always active
+        
+        // Set width
         fillEl.style.width = pct + '%';
         
+        // Set color based on level (only when active)
+        const colorClasses = ['active-green', 'active-yellow', 'active-orange', 'active-red'];
+        fillEl.classList.remove('inactive', ...colorClasses);
+        
+        if (!isActive || pct < 1) {
+            fillEl.classList.add('inactive');
+        } else if (pct < 50) {
+            fillEl.classList.add('active-green');
+        } else if (pct < 75) {
+            fillEl.classList.add('active-yellow');
+        } else if (pct < 90) {
+            fillEl.classList.add('active-orange');
+        } else {
+            fillEl.classList.add('active-red');
+        }
+        
+        // Peak-hold: track max and decay slowly
+        const peakKey = channel + 'PeakHold';
+        const peakTimeKey = channel + 'PeakTime';
+        const now = Date.now();
+        
+        if (!this[peakKey]) this[peakKey] = 0;
+        if (!this[peakTimeKey]) this[peakTimeKey] = 0;
+        
+        if (pct > this[peakKey]) {
+            this[peakKey] = pct;
+            this[peakTimeKey] = now;
+        } else if (now - this[peakTimeKey] > 1000) {
+            // Decay peak after 1 second
+            this[peakKey] = Math.max(pct, this[peakKey] - 0.5);
+        }
+        
+        if (peakEl) {
+            if (this[peakKey] > 2) {
+                peakEl.style.left = this[peakKey] + '%';
+                peakEl.style.opacity = '0.9';
+            } else {
+                peakEl.style.opacity = '0';
+            }
+        }
+        
         // Display text
-        if (db === -Infinity) {
+        if (db === -Infinity || pct < 1) {
             dbEl.textContent = '-∞ dB';
             dbEl.className = 'level-bar-value';
         } else {
@@ -194,24 +242,12 @@ class UVK5Remote {
             dbEl.className = 'level-bar-value';
         }
         
-        // Clipping detection (above -1 dBFS or > 0.89 linear)
+        // Clipping detection
         const isClipping = linearPeak > 0.89;
-        
         if (isClipping) {
             clipEl.classList.add('clipping');
             dbEl.classList.add('clip-warn');
             dbEl.textContent = 'CLIP!';
-            
-            // Auto-clear clip indicator after 1.5s
-            if (channel === 'tx' && this.txClipTimeout) clearTimeout(this.txClipTimeout);
-            if (channel === 'rx' && this.rxClipTimeout) clearTimeout(this.rxClipTimeout);
-            
-            const timeout = setTimeout(() => {
-                clipEl.classList.remove('clipping');
-            }, 1500);
-            
-            if (channel === 'tx') this.txClipTimeout = timeout;
-            if (channel === 'rx') this.rxClipTimeout = timeout;
         }
     }
     

@@ -136,26 +136,39 @@ body {
     overflow: hidden;
 }
 
-/* Fill inside the horizontal bar */
+/* Fill inside the horizontal bar – color set dynamically via JS */
 .level-bar-fill-h {
     height: 100%;
     width: 0%;
     border-radius: 3px;
-    transition: width 0.1s ease-out;
+    transition: width 0.08s linear;
     position: relative;
 }
 
-/* Color profiles per channel (horizontal gradient left→right) */
-.smeter-fill-h {
-    background: linear-gradient(to right, #00d4aa 0%, #00d4aa 55%, #ffaa00 75%, #ff4444 100%);
+/* Inactive state (mic on but not transmitting) */
+.level-bar-fill-h.inactive {
+    background: #444;
 }
 
-.rx-fill-h {
-    background: linear-gradient(to right, #00d4aa 0%, #00d4aa 60%, #ffaa00 80%, #ff4444 100%);
-}
+/* Active states – color based on level, set by JS */
+.level-bar-fill-h.active-green { background: #00d4aa; }
+.level-bar-fill-h.active-yellow { background: #ddcc00; }
+.level-bar-fill-h.active-orange { background: #ff8800; }
+.level-bar-fill-h.active-red { background: #ff3333; }
 
-.tx-fill-h {
-    background: linear-gradient(to right, #3399ff 0%, #3399ff 60%, #ffaa00 80%, #ff4444 100%);
+/* Peak-hold marker (thin vertical line that falls back slowly) */
+.level-bar-peak {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    width: 3px;
+    background: var(--text-bright);
+    border-radius: 1px;
+    left: 0%;
+    opacity: 0;
+    transition: left 0.1s linear, opacity 0.5s ease 1s;
+    z-index: 2;
+    box-shadow: 0 0 3px rgba(255,255,255,0.5);
 }
 
 /* Clip indicator (red dot at right end) */
