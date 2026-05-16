@@ -247,26 +247,66 @@ class UVK5Radio:
 
 # ============================================================
 # Yaesu FT-7800/8300 CAT Protocol
-# Standard Yaesu CAT over 9600 baud serial
+# Old-style 5-byte binary CAT, 9600 baud, 8N2
 # ============================================================
 
+def _freq_to_bcd(freq_hz):
+    """Convert frequency in Hz to 4-byte Yaesu BCD format.
+    
+    Yaesu BCD: each nibble = one digit, freq in 10Hz units.
+    Example: 145.5000 MHz = 14550000 Hz = 1455000 * 10 Hz
+    BCD: 14 55 00 00 → bytes 0x14 0x55 0x00 0x00
+    """
+    freq_10hz = int(freq_hz / 10)
+    # Build BCD nibble by nibble (8 digits, packed into 4 bytes)
+    digits = f"{freq_10hz:08d}"
+    bcd = bytes([
+        (int(digits[0]) << 4) | int(digits[1]),
+        (int(digits[2]) << 4) | int(digits[3]),
+        (int(digits[4]) << 4) | int(digits[5]),
+        (int(digits[6]) << 4) | int(digits[7]),
+    ])
+    return bcd
+
+
+def _bcd_to_freq(bcd_bytes):
+    """Convert 4-byte Yaesu BCD to frequency in Hz."""
+    digits = ''
+    for b in bcd_bytes:
+        digits += f'{(b >> 4) & 0x0F}{b & 0x0F}'
+    return int(digits) * 10  # 10Hz units → Hz
+
+
 class YaesuCATRadio(UVK5Radio):
-    """Interface for Yaesu FT-7800/FT-8300 via CAT protocol."""
+    """Interface for Yaesu FT-7800/FT-8300 via old-style 5-byte CAT protocol."""
     
     BAUD_RATE = 9600
     
-    # Yaesu CAT commands
-    CMD_FREQ_SET = b'\x00\x00\x00\x00'  # Placeholder - 4-byte BCD frequency
-    CMD_FREQ_READ = b'\x03'              # Read frequency
-    CMD_MODE_SET = b'\x07'              # Set mode
-    CMD_PTT_ON = b'\x08'                # PTT On
-    CMD_PTT_OFF = b'\x88'               # PTT Off
-    CMD_GET_STATUS = b'\xFA'            # Read status
-    CMD_GET_SMETER = b'\xF7'            # Read S-meter
+    # All CAT commands are exactly 5 bytes: [P1 P2 P3 P4 CMD]
+    CMD_FREQ_SET    = 0x01  # P1-P4 = BCD frequency in 10Hz units
+    CMD_FREQ_READ   = 0x03  # P1-P4 = 0x00, reply = 5 bytes BCD freq
+    CMD_MODE_SET    = 0x07  # P1-P4 = mode code
+    CMD_PTT_ON      = 0x08  # P1-P4 = 0x00
+    CMD_PTT_OFF     = 0x88  # P1-P4 = 0x00
+    CMD_GET_STATUS  = 0xFA  # P1-P4 = 0x00, reply = 5 bytes status
+    CMD_GET_SMETER  = 0xF7  # P1-P4 = 0x00, reply = 5 bytes (S-meter in byte 2)
+    
+    # Mode codes (4-byte, little-endian-like)
+    MODE_CODES = {
+        'FM':  b'\x01\x00\x00\x00',
+        'NFM': b'\x02\x00\x00\x00',  # Narrow FM (FT-8300)
+        'AM':  b'\x03\x00\x00\x00',
+        'WFM': b'\x04\x00\x00\x00',  # Wide FM
+    }
     
     def __init__(self, port=None):
         super().__init__(port)
         self.current_mode = 'FM'
+    
+    def _build_cmd(self, cmd, data=b'\x00\x00\x00\x00'):
+        """Build a 5-byte CAT command: [P1 P2 P3 P4 CMD]."""
+        assert len(data) == 4
+        return data + bytes([cmd])
     
     def connect(self, port=None):
         """Connect to Yaesu via serial."""
@@ -294,16 +334,20 @@ class YaesuCATRadio(UVK5Radio):
             self.connected = False
             return False
     
-    def _send_cat(self, cmd):
-        """Send a CAT command and read response."""
+    def _send_cat(self, cmd, data=b'\x00\x00\x00\x00'):
+        """Send a 5-byte CAT command and read 5-byte response."""
         if not self.serial or not self.serial.is_open:
             return None
+        packet = self._build_cmd(cmd, data)
         with self._lock:
             try:
                 self.serial.reset_input_buffer()
-                self.serial.write(cmd)
+                self.serial.write(packet)
                 response = self.serial.read(5)
-                return response
+                if len(response) == 5:
+                    return response
+                logger.warning(f"Yaesu short response: {len(response)} bytes")
+                return None
             except serial.SerialException as e:
                 logger.error(f"Yaesu CAT error: {e}")
                 self.connected = False
@@ -311,11 +355,29 @@ class YaesuCATRadio(UVK5Radio):
     
     def set_frequency(self, freq_mhz):
         """Set frequency using Yaesu BCD format."""
-        # Convert MHz to 10Hz units, then to 4-byte BCD
-        freq_10hz = int(freq_mhz * 100000)
-        bcd = freq_10hz.to_bytes(4, 'big')
-        self._send_cat(bcd)
-        self.current_freq = freq_mhz
+        freq_hz = int(freq_mhz * 1_000_000)
+        bcd = _freq_to_bcd(freq_hz)
+        resp = self._send_cat(self.CMD_FREQ_SET, bcd)
+        if resp:
+            self.current_freq = freq_mhz
+            logger.info(f"Yaesu freq set to {freq_mhz} MHz")
+    
+    def get_frequency(self):
+        """Read current frequency from radio."""
+        resp = self._send_cat(self.CMD_FREQ_READ)
+        if resp and len(resp) == 5:
+            freq_hz = _bcd_to_freq(resp[:4])
+            self.current_freq = freq_hz / 1_000_000
+            return self.current_freq
+        return self.current_freq
+    
+    def set_mode(self, mode):
+        """Set mode (FM, NFM, AM, WFM)."""
+        mode_data = self.MODE_CODES.get(mode, self.MODE_CODES['FM'])
+        resp = self._send_cat(self.CMD_MODE_SET, mode_data)
+        if resp:
+            self.current_mode = mode
+            logger.info(f"Yaesu mode set to {mode}")
     
     def set_ptt(self, active):
         """PTT via CAT command."""
@@ -325,26 +387,41 @@ class YaesuCATRadio(UVK5Radio):
             self._send_cat(self.CMD_PTT_OFF)
         self.ptt_active = active
     
+    def get_status(self):
+        """Get full radio status."""
+        status = {
+            'connected': self.connected,
+            'frequency': self.current_freq,
+            'mode': self.current_mode,
+            'ptt': self.ptt_active,
+            'smeter': self.smeter_value,
+            'rssi': self._smeter_to_rssi(),
+            'volume': self.volume,
+            'squelch': self.squelch,
+            'tx_power': self.tx_power,
+            'timestamp': datetime.now().isoformat()
+        }
+        return status
+    
     def _monitor_loop(self):
         """Background thread polling Yaesu status."""
         while self._running:
             try:
                 if self.connected and not SIMULATE:
-                    resp = self._send_cat(self.CMD_GET_SMETER)
-                    if resp and len(resp) >= 2:
-                        # Yaesu returns S-meter as 2-byte value
-                        raw = resp[1] if len(resp) > 1 else resp[0]
-                        # Map 0-255 to S0-S9+60
-                        if raw < 10:
-                            self.smeter_value = 0
-                        elif raw < 30:
-                            self.smeter_value = 1 + int((raw - 10) / 4)
-                        elif raw < 120:
-                            self.smeter_value = 3 + int((raw - 30) / 15)
-                        elif raw < 200:
-                            self.smeter_value = 9
-                        else:
-                            self.smeter_value = min(12, 10 + int((raw - 200) / 27))
+                    # Read frequency
+                    self.get_frequency()
+                    
+                    # Read S-meter / status
+                    resp = self._send_cat(self.CMD_GET_STATUS)
+                    if resp and len(resp) == 5:
+                        # Byte 2 (index 1) contains S-meter value for some models
+                        # Byte 3-4 contain status flags
+                        raw = resp[1]
+                        self.smeter_value = self._raw_to_smeter(raw)
+                        
+                        # Check PTT status from flags
+                        # Bit flags in response indicate PTT state, etc.
+                    
                 elif self.connected and SIMULATE:
                     import random
                     self.smeter_value = random.choice([3, 4, 5, 5, 6, 6, 7])
@@ -352,6 +429,28 @@ class YaesuCATRadio(UVK5Radio):
             except Exception as e:
                 logger.error(f"Yaesu monitor error: {e}")
                 eventlet.sleep(5.0)
+    
+    def _raw_to_smeter(self, raw):
+        """Convert raw S-meter byte to S0-S9+60 scale."""
+        if raw < 10:
+            return 0
+        elif raw < 30:
+            return 1 + int((raw - 10) / 4)
+        elif raw < 120:
+            return 3 + int((raw - 30) / 15)
+        elif raw < 200:
+            return 9
+        else:
+            return min(12, 10 + int((raw - 200) / 27))
+    
+    def _smeter_to_rssi(self):
+        """Convert S-meter value to approximate dBm."""
+        smeter_db = {
+            0: -127, 1: -121, 2: -115, 3: -109, 4: -103,
+            5: -97, 6: -91, 7: -85, 8: -79, 9: -73,
+            10: -63, 11: -53, 12: -43
+        }
+        return smeter_db.get(self.smeter_value, -127)
 # ============================================================
 
 app = Flask(__name__, 
