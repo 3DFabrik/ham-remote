@@ -12,7 +12,7 @@ class UVK5Remote {
         this.squelch = 1;
         this.volume = 5;
         this.txPower = 'LOW';
-        this.simulate = true;
+        this.simulate = false;
         this.audioContext = null;
         this.mediaStream = null;
         this.audioProcessor = null;
@@ -101,7 +101,7 @@ class UVK5Remote {
             powerToggle: document.getElementById('power-toggle'),
             portSelect: document.getElementById('port-select'),
             radioTypeSelect: document.getElementById('radio-type'),
-            simulateToggle: document.getElementById('simulate-toggle'),
+            pttHotkeyBtn: document.getElementById('ptt-hotkey-btn'),
             btnConnect: document.getElementById('btn-connect'),
             btnDisconnect: document.getElementById('btn-disconnect'),
             btnRefreshPorts: document.getElementById('btn-refresh-ports'),
@@ -679,15 +679,6 @@ class UVK5Remote {
         
         this.els.radioTypeSelect.addEventListener('change', () => this.setRadioType());
         
-        // Simulation toggle
-        this.els.simulateToggle.addEventListener('change', () => {
-            const enabled = this.els.simulateToggle.checked;
-            fetch('/api/simulate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled })
-            }).catch(err => console.error('Set simulate error:', err));
-        });
         
         // Tabs
         document.querySelectorAll('.tab').forEach(tab => {
@@ -754,18 +745,20 @@ class UVK5Remote {
     
     async connectRadio() {
         const port = this.els.portSelect.value || undefined;
+        const audioPlayback = this.els.audioPlayback?.value || '';
+        const audioCapture = this.els.audioCapture?.value || '';
         
         try {
             const resp = await fetch('/api/connect', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ port })
+                body: JSON.stringify({ port, audio_playback: audioPlayback, audio_capture: audioCapture })
             });
             const data = await resp.json();
             
             if (data.success) {
                 this.updateConnectionStatus(true);
-                console.log('Radio connected' + (data.simulated ? ' (simulated)' : ''));
+                console.log('Radio connected');
                 // Auto-start RX audio via REST (more reliable than Socket.IO)
                 this.startRxAudio();
             }
@@ -839,7 +832,7 @@ class UVK5Remote {
             this.els.powerToggle.className = 'btn-toggle' + (data.tx_power === 'HIGH' ? ' high' : '');
         }
         if (data.connected !== undefined) {
-            this.updateConnectionStatus(data.connected || data.simulated);
+            this.updateConnectionStatus(data.connected);
         }
         if (data.smeter !== undefined) {
             this.updateSMeter(data.smeter);
@@ -1009,4 +1002,24 @@ class UVK5Remote {
 // Initialize on load
 document.addEventListener('DOMContentLoaded', () => {
     window.hamRemote = new UVK5Remote();
+    
+    // Restore saved settings
+    fetch('/api/settings').then(r => r.json()).then(settings => {
+        if (settings.port) {
+            const portSel = document.getElementById('port-select');
+            if (portSel) portSel.value = settings.port;
+        }
+        if (settings.audio_playback) {
+            const pb = document.getElementById('audio-playback');
+            if (pb) pb.value = settings.audio_playback;
+        }
+        if (settings.audio_capture) {
+            const cap = document.getElementById('audio-capture');
+            if (cap) cap.value = settings.audio_capture;
+        }
+        if (settings.radio_type) {
+            const rt = document.getElementById('radio-type');
+            if (rt) rt.value = settings.radio_type;
+        }
+    }).catch(() => {});
 });

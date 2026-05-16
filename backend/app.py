@@ -229,16 +229,12 @@ class UVK5Radio:
         """Background thread to poll radio status."""
         while self._running:
             try:
-                if self.connected and not SIMULATE:
+                if self.connected:
                     # Poll S-Meter / signal strength from radio
                     # Yaesu CAT: read S-meter via specific command
                     # UV-K5: read RSSI from serial
                     # TODO: Implement actual polling per radio type
                     pass
-                elif self.connected and SIMULATE:
-                    # Simulate gentle S-meter fluctuation
-                    import random
-                    self.smeter_value = random.choice([3, 4, 5, 5, 6, 6, 7])
                 eventlet.sleep(1.0)
             except Exception as e:
                 logger.error(f"Monitor error: {e}")
@@ -408,7 +404,7 @@ class YaesuCATRadio(UVK5Radio):
         """Background thread polling Yaesu status."""
         while self._running:
             try:
-                if self.connected and not SIMULATE:
+                if self.connected:
                     # Only read S-meter, NOT frequency (updated via set readback)
                     resp = self._send_cat(self.CMD_GET_STATUS)
                     if resp and len(resp) == 5:
@@ -416,10 +412,6 @@ class YaesuCATRadio(UVK5Radio):
                         self.smeter_value = self._raw_to_smeter(raw)
                     socketio.emit('radio_update', self.get_status())
                     
-                elif self.connected and SIMULATE:
-                    import random
-                    self.smeter_value = random.choice([3, 4, 5, 5, 6, 6, 7])
-                eventlet.sleep(1.0)
             except Exception as e:
                 logger.error(f"Yaesu monitor error: {e}")
                 eventlet.sleep(5.0)
@@ -676,17 +668,13 @@ class XieguX6100Radio(UVK5Radio):
         """Background thread polling X6100 status."""
         while self._running:
             try:
-                if self.connected and not SIMULATE:
+                if self.connected:
                     # Read S-meter only (freq updated via set_frequency readback)
                     resp = self._send_civ(self.CMD_SMETER_READ, subcmd=0x02)
                     if resp and len(resp) >= 7:
                         raw = resp[5] if len(resp) > 5 else 0
                         self.smeter_value = self._raw_to_smeter(raw)
                     socketio.emit('radio_update', self.get_status())
-                elif self.connected and SIMULATE:
-                    import random
-                    self.smeter_value = random.choice([3, 4, 5, 5, 6, 6, 7])
-                eventlet.sleep(2.0)
             except Exception as e:
                 logger.error(f"X6100 monitor error: {e}")
                 eventlet.sleep(5.0)
@@ -741,7 +729,43 @@ if os.path.exists(_RADIO_TYPE_FILE):
         pass
 
 # Simulated mode for development without hardware
-SIMULATE = os.environ.get('UVK5_SIMULATE', 'true').lower() == 'true'
+SIMULATE = False  # Simulation removed - real hardware only
+
+# Settings persistence
+_SETTINGS_FILE = os.path.join(os.path.dirname(__file__), '..', '.settings')
+
+
+def _load_settings():
+    """Load saved settings from file."""
+    try:
+        if os.path.exists(_SETTINGS_FILE):
+            with open(_SETTINGS_FILE) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_settings(data):
+    """Save settings to file."""
+    try:
+        current = _load_settings()
+        # Only save relevant fields
+        for key in ['port', 'audio_playback', 'audio_capture']:
+            if key in data:
+                current[key] = data[key]
+        with open(_SETTINGS_FILE, 'w') as f:
+            json.dump(current, f)
+    except Exception as e:
+        logger.error(f"Failed to save settings: {e}")
+
+
+@app.route('/api/settings')
+def api_get_settings():
+    """Get saved settings."""
+    settings = _load_settings()
+    settings['radio_type'] = current_radio_type
+    return jsonify(settings)
 
 # Active audio devices
 audio_playback_dev = os.environ.get('AUDIO_PLAYBACK', None)
@@ -824,21 +848,6 @@ def index():
 @app.route('/api/status')
 def api_status():
     """Get current radio status as JSON."""
-    if SIMULATE and not radio.connected:
-        return jsonify({
-            'connected': True,
-            'simulated': True,
-            'port': 'SIMULATED',
-            'frequency': radio.current_freq,
-            'mode': radio.current_mode,
-            'ptt': radio.ptt_active,
-            'squelch': radio.squelch,
-            'volume': radio.volume,
-            'tx_power': radio.tx_power,
-            'rssi': -87,
-            'smeter': 5,  # Simulated: S5
-            'timestamp': datetime.now().isoformat()
-        })
     return jsonify(radio.get_status())
 
 
@@ -848,22 +857,13 @@ def api_connect():
     data = request.json or {}
     port = data.get('port')
     
-    if SIMULATE and not port:
-        radio.connected = True
-        return jsonify({'success': True, 'simulated': True, 'port': 'SIMULATED'})
-    
     success = radio.connect(port)
+    
+    # Save settings
+    _save_settings(data)
+    
     return jsonify({'success': success, 'port': radio.port})
 
-
-@app.route('/api/simulate', methods=['POST'])
-def api_set_simulate():
-    """Toggle simulation mode."""
-    global SIMULATE
-    data = request.json or {}
-    SIMULATE = data.get('enabled', True)
-    logger.info(f"Simulation mode set to: {SIMULATE}")
-    return jsonify({'success': True, 'simulate': SIMULATE})
 
 
 @app.route('/api/disconnect', methods=['POST'])
@@ -1108,7 +1108,7 @@ class AudioStreamManager:
             pcm = self.opus_decoder.decode(opus_data, self.FRAME_SIZE)
             
             # Play to sound card
-            if not SIMULATE and audio_playback_dev:
+            if audio_playback_dev:
                 # Write PCM to aplay subprocess
                 if not hasattr(self, '_playback_proc') or self._playback_proc is None:
                     cmd = [
@@ -1155,20 +1155,7 @@ class AudioStreamManager:
         
         while self._running:
             try:
-                if SIMULATE:
-                    eventlet.sleep(0.02)  # 20ms frames
-                    # Simulate silence frame
-                    silence = b'\x00' * self.FRAME_BYTES
-                    opus_frame = self.opus_encoder.encode(silence, self.FRAME_SIZE)
-                    encoded = base64.b64encode(opus_frame).decode()
-                    for sid in list(self.rx_clients):
-                        socketio.emit('audio_tx', {
-                            'data': encoded,
-                            'codec': 'pcm',
-                            'sampleRate': self.SAMPLE_RATE
-                        }, room=sid)
-                else:
-                    # Real capture via arecord
+                # Real capture via arecord
                     device = audio_capture_dev or 'default'
                     cmd = [
                         'arecord',
@@ -1299,6 +1286,6 @@ if __name__ == '__main__':
     host = os.environ.get('HOST', '0.0.0.0')
     
     logger.info(f"Starting HAM Remote on {host}:{port}")
-    logger.info(f"Simulation mode: {SIMULATE}")
+    logger.info(f"HAM Remote starting on 0.0.0.0:8080")
     
     socketio.run(app, host=host, port=port, debug=False)

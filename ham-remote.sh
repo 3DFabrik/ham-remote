@@ -44,7 +44,7 @@ do_start() {
     source venv/bin/activate
     
     echo "🚀 Starting HAM Remote on port $PORT..."
-    UVK5_SIMULATE=${SIMULATE:-true} python backend/app.py &
+    python backend/app.py &
     local pid=$!
     echo "$pid" > "$PIDFILE"
     
@@ -102,7 +102,7 @@ case "${1:-start}" in
     *)
         echo "Usage: $0 {start|stop|restart|status}"
         echo ""
-        echo "  SIMULATE=false $0 start  - Start with real hardware"
+        echo "  $0 start|stop|restart|status"
         exit 1
         ;;
 esac
