@@ -1,6 +1,7 @@
 /* ============================================================
-   UV-K5 Remote - Stylesheet
+   HAM Remote - Stylesheet
    Mobile-first, dark theme, designed for touch operation
+   Level bars grow upward, frequency display is compact
    ============================================================ */
 
 :root {
@@ -12,6 +13,7 @@
     --accent-glow: rgba(0, 212, 170, 0.3);
     --danger: #ff4444;
     --danger-glow: rgba(255, 68, 68, 0.4);
+    --warning: #ffaa00;
     --text: #e0e0e0;
     --text-dim: #888;
     --text-bright: #fff;
@@ -43,7 +45,7 @@ body {
     display: flex;
     flex-direction: column;
     min-height: 100vh;
-    gap: 16px;
+    gap: 12px;
 }
 
 /* Header */
@@ -70,7 +72,163 @@ body {
     width: 32px;
 }
 
-/* Tabs */
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-dim);
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.status-dot.connected {
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent-glow);
+}
+
+.status-dot.disconnected {
+    background: #555;
+}
+
+/* ============================================================
+   LEVEL BARS (upward-growing, always visible)
+   ============================================================ */
+
+.level-section {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    padding: 12px 14px 10px;
+}
+
+.level-bar-container {
+    display: flex;
+    gap: 14px;
+    align-items: stretch;
+}
+
+.level-bar-wrapper {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+/* The vertical bar track */
+.level-bar-track {
+    width: 100%;
+    height: 100px;
+    background: var(--bg-dark);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end; /* bars grow from bottom */
+}
+
+/* Fill inside the bar */
+.level-bar-fill {
+    width: 100%;
+    height: 0%;
+    border-radius: 4px;
+    transition: height 0.1s ease-out;
+    position: relative;
+}
+
+/* Color profiles per channel */
+.smeter-fill {
+    background: linear-gradient(to top, #00d4aa 0%, #00d4aa 55%, #ffaa00 75%, #ff4444 100%);
+}
+
+.rx-fill {
+    background: linear-gradient(to top, #00d4aa 0%, #00d4aa 60%, #ffaa00 80%, #ff4444 100%);
+}
+
+.tx-fill {
+    background: linear-gradient(to top, #3399ff 0%, #3399ff 60%, #ffaa00 80%, #ff4444 100%);
+}
+
+/* Clip indicator (red dot in top-right of bar) */
+.level-bar-clip-indicator {
+    position: absolute;
+    top: 3px;
+    right: 4px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: transparent;
+    transition: background 0.15s;
+    z-index: 2;
+}
+
+.level-bar-clip-indicator.clipping {
+    background: var(--danger);
+    box-shadow: 0 0 6px var(--danger-glow);
+}
+
+/* dB scale marks on the track */
+.level-bar-track::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 12%;
+    height: 1px;
+    background: rgba(255,255,255,0.15);
+    z-index: 1;
+}
+
+.level-bar-track::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 40%;
+    height: 1px;
+    background: rgba(255,255,255,0.10);
+    z-index: 1;
+}
+
+/* Label under each bar */
+.level-bar-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    padding: 0 2px;
+}
+
+.level-bar-name {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.level-bar-value {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+}
+
+.level-bar-value.clip-warn {
+    color: var(--danger);
+    font-weight: 700;
+}
+
+/* ============================================================
+   Tabs
+   ============================================================ */
+
 .tabs {
     display: flex;
     background: var(--bg-dark);
@@ -109,107 +267,76 @@ body {
     display: block;
 }
 
-/* Setup section */
-.setup-section {
-    padding: 16px;
-}
+/* ============================================================
+   Frequency Display (compact)
+   ============================================================ */
 
-.setup-heading {
-    font-size: 14px;
-    color: var(--accent);
-    margin: 0 0 12px 0;
-    padding-bottom: 6px;
-    border-bottom: 1px solid var(--border);
-    font-weight: 600;
-}
-
-.header-right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: var(--text-dim);
-}
-
-.status-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    display: inline-block;
-}
-
-.status-dot.connected {
-    background: var(--accent);
-    box-shadow: 0 0 8px var(--accent-glow);
-}
-
-.status-dot.disconnected {
-    background: #555;
-}
-
-/* Frequency Display */
 .freq-section {
     background: var(--bg-card);
     border-radius: var(--radius);
-    padding: 20px;
+    padding: 16px;
     text-align: center;
+}
+
+.freq-compact {
+    padding: 14px 16px 16px;
 }
 
 .freq-display {
     display: flex;
     align-items: baseline;
     justify-content: center;
-    gap: 8px;
-    margin-bottom: 4px;
+    gap: 6px;
+    margin-bottom: 2px;
 }
 
 .freq-mhz {
     font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-    font-size: 56px;
+    font-size: 42px;
     font-weight: 700;
     color: var(--accent);
-    letter-spacing: 2px;
-    text-shadow: 0 0 20px var(--accent-glow);
+    letter-spacing: 1px;
+    text-shadow: 0 0 12px var(--accent-glow);
     line-height: 1;
 }
 
 .freq-unit {
-    font-size: 18px;
+    font-size: 14px;
     color: var(--text-dim);
     font-weight: 500;
 }
 
 .freq-label {
-    font-size: 14px;
+    font-size: 12px;
     color: var(--text-dim);
-    margin-bottom: 16px;
+    margin-bottom: 12px;
 }
 
 /* Frequency digit controls */
 .freq-digits {
     display: flex;
     justify-content: center;
-    gap: 4px;
-    margin-bottom: 16px;
+    gap: 3px;
+    margin-bottom: 12px;
 }
 
 .freq-digit {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 2px;
+    gap: 1px;
 }
 
 .freq-digit .digit-up,
 .freq-digit .digit-down {
-    width: 36px;
-    height: 28px;
+    width: 32px;
+    height: 24px;
     border: 1px solid var(--border);
     background: var(--bg-dark);
     color: var(--text-dim);
-    border-radius: 6px;
+    border-radius: 5px;
     cursor: pointer;
-    font-size: 14px;
+    font-size: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -223,21 +350,21 @@ body {
 
 .freq-digit .digit-value {
     font-family: 'SF Mono', monospace;
-    font-size: 24px;
+    font-size: 20px;
     font-weight: 600;
     color: var(--text-bright);
-    width: 36px;
+    width: 32px;
     text-align: center;
     line-height: 1.2;
 }
 
 .freq-digit.separator {
-    font-size: 24px;
+    font-size: 20px;
     font-weight: 600;
     color: var(--text-dim);
     display: flex;
     align-items: center;
-    padding: 0 2px;
+    padding: 0 1px;
 }
 
 /* Quick frequency buttons */
@@ -248,12 +375,12 @@ body {
 }
 
 .btn-freq {
-    padding: 8px 16px;
+    padding: 6px 14px;
     background: var(--bg-dark);
     border: 1px solid var(--border);
     border-radius: 8px;
     color: var(--text);
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.15s;
@@ -264,11 +391,14 @@ body {
     border-color: var(--accent);
 }
 
-/* Controls */
+/* ============================================================
+   Controls
+   ============================================================ */
+
 .controls-section {
     background: var(--bg-card);
     border-radius: var(--radius);
-    padding: 16px;
+    padding: 14px;
 }
 
 .control-row {
@@ -345,7 +475,10 @@ body {
     color: var(--text-bright);
 }
 
-/* PTT Button */
+/* ============================================================
+   PTT Button
+   ============================================================ */
+
 .ptt-section {
     flex: 1;
     display: flex;
@@ -355,8 +488,8 @@ body {
 }
 
 .btn-ptt {
-    width: 160px;
-    height: 160px;
+    width: 140px;
+    height: 140px;
     border-radius: 50%;
     border: 4px solid var(--accent);
     background: var(--bg-card);
@@ -375,11 +508,11 @@ body {
 }
 
 .btn-ptt .ptt-label {
-    font-size: 32px;
+    font-size: 30px;
 }
 
 .btn-ptt .ptt-hint {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-dim);
     font-weight: 400;
 }
@@ -395,12 +528,28 @@ body {
     color: rgba(255,255,255,0.7);
 }
 
-/* Settings */
+/* ============================================================
+   Setup Tab
+   ============================================================ */
+
+.setup-section {
+    padding: 14px 16px;
+}
+
+.setup-heading {
+    font-size: 14px;
+    color: var(--accent);
+    margin: 0 0 10px 0;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+}
+
 .setting-row {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
 }
 
 .setting-row label {
@@ -452,96 +601,6 @@ body {
     cursor: pointer;
 }
 
-.settings-divider {
-    border: none;
-    border-top: 1px solid var(--border);
-    margin: 12px 0;
-}
-
-/* S-Meter */
-.smeter-section {
-    padding: 8px 0 0;
-}
-
-.smeter-labels {
-    display: flex;
-    justify-content: space-between;
-    font-size: 9px;
-    color: var(--text-dim);
-    padding: 0 4px;
-    margin-bottom: 2px;
-}
-
-.smeter-plus {
-    color: #ff8800;
-}
-
-.smeter-bar {
-    position: relative;
-    height: 12px;
-    background: var(--bg-dark);
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    overflow: hidden;
-}
-
-.smeter-fill {
-    height: 100%;
-    width: 0%;
-    border-radius: 6px;
-    transition: width 0.3s ease-out, background 0.3s;
-    background: linear-gradient(90deg, #00d4aa 0%, #00d4aa 60%, #ffaa00 75%, #ff4444 100%);
-}
-
-.smeter-needle {
-    position: absolute;
-    right: -1px;
-    top: -2px;
-    width: 3px;
-    height: 16px;
-    background: var(--text-bright);
-    border-radius: 1px;
-    box-shadow: 0 0 4px rgba(255,255,255,0.5);
-}
-
-.smeter-s9-mark {
-    position: absolute;
-    left: 56%;
-    top: 0;
-    height: 100%;
-    width: 1px;
-    background: rgba(255,255,255,0.3);
-}
-
-.smeter-value {
-    text-align: center;
-    font-family: 'SF Mono', monospace;
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--accent);
-    padding-top: 4px;
-}
-
-.smeter-value.s9-plus {
-    color: #ffaa00;
-}
-
-.smeter-value.no-signal {
-    color: var(--text-dim);
-}
-
-/* Footer */
-.footer {
-    text-align: center;
-    padding: 16px 0 8px;
-}
-
-.footer-text {
-    font-size: 12px;
-    color: var(--text-dim);
-    opacity: 0.6;
-}
-
 /* Hotkey button */
 .btn-hotkey {
     padding: 8px 20px;
@@ -573,14 +632,31 @@ body {
     margin-left: 8px;
 }
 
-/* Responsive adjustments */
+/* Footer */
+.footer {
+    text-align: center;
+    padding: 12px 0 8px;
+}
+
+.footer-text {
+    font-size: 12px;
+    color: var(--text-dim);
+    opacity: 0.6;
+}
+
+/* ============================================================
+   Responsive
+   ============================================================ */
+
 @media (max-height: 700px) {
-    .freq-mhz { font-size: 44px; }
-    .btn-ptt { width: 130px; height: 130px; }
+    .freq-mhz { font-size: 36px; }
+    .level-bar-track { height: 70px; }
+    .btn-ptt { width: 120px; height: 120px; }
     .btn-ptt .ptt-label { font-size: 26px; }
 }
 
 @media (min-width: 768px) {
     #app { padding: 20px; }
-    .freq-mhz { font-size: 64px; }
+    .freq-mhz { font-size: 48px; }
+    .level-bar-track { height: 110px; }
 }

@@ -1,6 +1,6 @@
 /**
- * UV-K5 Remote - Frontend Application
- * Handles UI, WebSocket communication, and audio streaming
+ * HAM Remote - Frontend Application
+ * Handles UI, WebSocket communication, audio streaming, and level meters
  */
 
 class UVK5Remote {
@@ -18,6 +18,12 @@ class UVK5Remote {
         this.audioProcessor = null;
         this.pttHotkey = localStorage.getItem('ptt_hotkey') || 'Space';
         
+        // Level meter state
+        this.txPeakHold = 0;
+        this.rxPeakHold = 0;
+        this.txClipTimeout = null;
+        this.rxClipTimeout = null;
+        
         this.init();
     }
     
@@ -27,6 +33,7 @@ class UVK5Remote {
         this.setupPTT();
         this.setupControls();
         this.setupSettings();
+        this.setupLevelMeters();
         this.connectWebSocket();
     }
     
@@ -59,8 +66,8 @@ class UVK5Remote {
         
         this.socket.on('audio_tx', (data) => {
             // Incoming audio from radio RX
-            if (data.data && data.codec === 'pcm') {
-                this.playRxAudio(data.data);
+            if (data.data) {
+                this.processRxAudio(data);
             }
         });
         
@@ -76,7 +83,6 @@ class UVK5Remote {
     // ============================================================
     
     setupUI() {
-        // Elements
         this.els = {
             freqDisplay: document.getElementById('freq-display'),
             freqLabel: document.getElementById('freq-label'),
@@ -93,23 +99,133 @@ class UVK5Remote {
             btnConnect: document.getElementById('btn-connect'),
             btnDisconnect: document.getElementById('btn-disconnect'),
             btnRefreshPorts: document.getElementById('btn-refresh-ports'),
-            smeterFill: document.getElementById('smeter-fill'),
-            smeterNeedle: document.getElementById('smeter-needle'),
-            smeterValue: document.getElementById('smeter-value'),
+            // Level bars
+            smeterFill: document.getElementById('smeter-bar-fill'),
+            smeterDb: document.getElementById('smeter-db'),
+            smeterClip: document.getElementById('smeter-clip'),
+            rxBarFill: document.getElementById('rx-bar-fill'),
+            rxDb: document.getElementById('rx-db'),
+            rxClip: document.getElementById('rx-clip'),
+            txBarFill: document.getElementById('tx-bar-fill'),
+            txDb: document.getElementById('tx-db'),
+            txClip: document.getElementById('tx-clip'),
         };
     }
     
+    // ============================================================
+    // Level Meters
+    // ============================================================
+    
+    setupLevelMeters() {
+        // RX analyser will be created when AudioContext is ready
+        // TX analyser is created when microphone starts
+        this.rxAnalyser = null;
+        this.txAnalyser = null;
+        this.rxDataArray = null;
+        this.txDataArray = null;
+        
+        // Start the level meter animation loop
+        this._levelMeterLoop();
+    }
+    
+    _levelMeterLoop() {
+        // Update TX level (from mic analyser)
+        if (this.txAnalyser && this.txDataArray) {
+            this.txAnalyser.getByteTimeDomainData(this.txDataArray);
+            const peak = this._getPeakFromData(this.txDataArray);
+            const db = this._amplitudeToDb(peak);
+            this._updateBar('tx', db, peak);
+        }
+        
+        // Update RX level (from received audio analyser)
+        if (this.rxAnalyser && this.rxDataArray) {
+            this.rxAnalyser.getByteTimeDomainData(this.rxDataArray);
+            const peak = this._getPeakFromData(this.rxDataArray);
+            const db = this._amplitudeToDb(peak);
+            this._updateBar('rx', db, peak);
+        }
+        
+        requestAnimationFrame(() => this._levelMeterLoop());
+    }
+    
+    _getPeakFromData(dataArray) {
+        let max = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+            const v = Math.abs(dataArray[i] - 128) / 128;
+            if (v > max) max = v;
+        }
+        return max;
+    }
+    
+    _amplitudeToDb(amplitude) {
+        if (amplitude <= 0) return -Infinity;
+        return 20 * Math.log10(amplitude);
+    }
+    
+    _updateBar(channel, db, linearPeak) {
+        const fillEl = this.els[channel + 'BarFill'];
+        const dbEl = this.els[channel + 'Db'];
+        const clipEl = this.els[channel + 'Clip'];
+        
+        if (!fillEl) return;
+        
+        // Map dB to percentage: -60dB = 0%, 0dB = 100%
+        const pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+        fillEl.style.height = pct + '%';
+        
+        // Display text
+        if (db === -Infinity) {
+            dbEl.textContent = '-∞ dB';
+            dbEl.className = 'level-bar-value';
+        } else {
+            dbEl.textContent = db.toFixed(1) + ' dB';
+            dbEl.className = 'level-bar-value';
+        }
+        
+        // Clipping detection (above -1 dBFS or > 0.89 linear)
+        const isClipping = linearPeak > 0.89;
+        
+        if (isClipping) {
+            clipEl.classList.add('clipping');
+            dbEl.classList.add('clip-warn');
+            dbEl.textContent = 'CLIP!';
+            
+            // Auto-clear clip indicator after 1.5s
+            if (channel === 'tx' && this.txClipTimeout) clearTimeout(this.txClipTimeout);
+            if (channel === 'rx' && this.rxClipTimeout) clearTimeout(this.rxClipTimeout);
+            
+            const timeout = setTimeout(() => {
+                clipEl.classList.remove('clipping');
+            }, 1500);
+            
+            if (channel === 'tx') this.txClipTimeout = timeout;
+            if (channel === 'rx') this.rxClipTimeout = timeout;
+        }
+    }
+    
+    _createAnalyser(source) {
+        const analyser = this.audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.5;
+        source.connect(analyser);
+        // Don't connect analyser to destination - it's just for measurement
+        return analyser;
+    }
+    
+    // ============================================================
+    // Frequency
+    // ============================================================
+    
     setupFrequencyDigits() {
         const digitsContainer = this.els.freqDigits;
-        // Format: 1 4 5 . 5 0 0
         const positions = [
-            { type: 'digit', index: 0 },  // 1
-            { type: 'digit', index: 1 },  // 4
-            { type: 'digit', index: 2 },  // 5
+            { type: 'digit', index: 0 },
+            { type: 'digit', index: 1 },
+            { type: 'digit', index: 2 },
             { type: 'separator' },
-            { type: 'digit', index: 3 },  // 5
-            { type: 'digit', index: 4 },  // 0
-            { type: 'digit', index: 5 },  // 0
+            { type: 'digit', index: 3 },
+            { type: 'digit', index: 4 },
+            { type: 'digit', index: 5 },
         ];
         
         digitsContainer.innerHTML = '';
@@ -149,7 +265,6 @@ class UVK5Remote {
         
         this.updateFrequencyDisplay();
         
-        // Quick frequency buttons
         document.querySelectorAll('.btn-freq').forEach(btn => {
             btn.addEventListener('click', () => {
                 const freq = parseFloat(btn.dataset.freq);
@@ -158,157 +273,9 @@ class UVK5Remote {
         });
     }
     
-    setupPTT() {
-        const pttBtn = this.els.pttButton;
-        
-        // Touch events for mobile (hold-to-talk)
-        pttBtn.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            this.pttOn();
-        });
-        
-        pttBtn.addEventListener('touchend', (e) => {
-            e.preventDefault();
-            this.pttOff();
-        });
-        
-        pttBtn.addEventListener('touchcancel', (e) => {
-            e.preventDefault();
-            this.pttOff();
-        });
-        
-        // Mouse events for desktop
-        pttBtn.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            this.pttOn();
-        });
-        
-        pttBtn.addEventListener('mouseup', (e) => {
-            e.preventDefault();
-            this.pttOff();
-        });
-        
-        pttBtn.addEventListener('mouseleave', () => {
-            if (this.pttActive) this.pttOff();
-        });
-        
-        // Keyboard shortcut (spacebar)
-        document.addEventListener('keydown', (e) => {
-            if (e.code === this.pttHotkey && !e.repeat) {
-                e.preventDefault();
-                this.pttOn();
-            }
-        });
-        
-        document.addEventListener('keyup', (e) => {
-            if (e.code === this.pttHotkey) {
-                e.preventDefault();
-                this.pttOff();
-            }
-        });
-    }
-    
-    setupControls() {
-        // Squelch
-        document.getElementById('sq-down').addEventListener('click', () => {
-            this.setSquelch(Math.max(0, this.squelch - 1));
-        });
-        document.getElementById('sq-up').addEventListener('click', () => {
-            this.setSquelch(Math.min(9, this.squelch + 1));
-        });
-        
-        // Volume
-        document.getElementById('vol-down').addEventListener('click', () => {
-            this.setVolume(Math.max(0, this.volume - 1));
-        });
-        document.getElementById('vol-up').addEventListener('click', () => {
-            this.setVolume(Math.min(15, this.volume + 1));
-        });
-        
-        // TX Power toggle
-        this.els.powerToggle.addEventListener('click', () => {
-            this.setTxPower(this.txPower === 'LOW' ? 'HIGH' : 'LOW');
-        });
-    }
-    
-    setupSettings() {
-        // Refresh ports
-        this.els.btnRefreshPorts.addEventListener('click', () => this.refreshPorts());
-        
-        // Connect
-        this.els.btnConnect.addEventListener('click', () => this.connectRadio());
-        
-        // Disconnect
-        this.els.btnDisconnect.addEventListener('click', () => this.disconnectRadio());
-        
-        // Audio devices
-        this.els.audioPlayback = document.getElementById('audio-playback');
-        this.els.audioCapture = document.getElementById('audio-capture');
-        this.els.btnRefreshAudio = document.getElementById('btn-refresh-audio');
-        
-        this.els.btnRefreshAudio.addEventListener('click', () => this.refreshAudioDevices());
-        this.els.audioPlayback.addEventListener('change', () => this.setAudioConfig());
-        this.els.audioCapture.addEventListener('change', () => this.setAudioConfig());
-        
-        // Radio type
-        this.els.radioTypeSelect.addEventListener('change', () => this.setRadioType());
-        
-        // Tabs
-        document.querySelectorAll('.tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-                tab.classList.add('active');
-                document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
-            });
-        });
-        
-        // PTT Hotkey
-        this.els.hotkeyBtn = document.getElementById('ptt-hotkey-btn');
-        this.els.hotkeyHint = document.getElementById('hotkey-hint');
-        this.els.hotkeyBtn.textContent = this.pttHotkey;
-        
-        this.els.hotkeyBtn.addEventListener('click', () => this.startHotkeyListen());
-        
-        // Load ports, audio devices, and radio types on open
-        this.refreshPorts();
-        this.refreshAudioDevices();
-        this.refreshRadioTypes();
-        
-        // Audio streaming
-        this.audioContext = null;
-        this.micStream = null;
-        this.mediaRecorder = null;
-        this.opusDecoder = null;
-        this.rxAudioQueue = [];
-        this.rxPlaying = false;
-        
-        // Initialize Opus decoder for RX playback
-        this._initOpusDecoder();
-    }
-    
-    async _initOpusDecoder() {
-        try {
-            if (typeof OpusDecoder !== 'undefined') {
-                this.opusDecoder = new OpusDecoder();
-                await this.opusDecoder.ready;
-                console.log('Opus decoder initialized');
-            } else {
-                console.warn('Opus decoder library not loaded, RX will use PCM fallback');
-            }
-        } catch (err) {
-            console.warn('Opus decoder init failed:', err);
-        }
-    }
-    
-    // ============================================================
-    // Radio Actions
-    // ============================================================
-    
     setFrequency(freq) {
-        // Clamp to 2m band
         freq = Math.max(144.0, Math.min(146.0, freq));
-        freq = Math.round(freq * 1000) / 1000; // 3 decimal places
+        freq = Math.round(freq * 1000) / 1000;
         
         this.frequency = freq;
         this.updateFrequencyDisplay();
@@ -326,10 +293,8 @@ class UVK5Remote {
         
         digits[index] = (digits[index] + delta + 10) % 10;
         
-        // Reconstruct frequency: digits are 1 4 5 5 0 0 → 145.500
         const newFreq = parseInt(digits.join('')) / 1000;
         
-        // Validate band limits
         if (newFreq >= 144.0 && newFreq <= 146.0) {
             this.setFrequency(newFreq);
         }
@@ -346,12 +311,63 @@ class UVK5Remote {
         });
     }
     
+    // ============================================================
+    // PTT
+    // ============================================================
+    
+    setupPTT() {
+        const pttBtn = this.els.pttButton;
+        
+        pttBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            this.pttOn();
+        });
+        
+        pttBtn.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            this.pttOff();
+        });
+        
+        pttBtn.addEventListener('touchcancel', (e) => {
+            e.preventDefault();
+            this.pttOff();
+        });
+        
+        pttBtn.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            this.pttOn();
+        });
+        
+        pttBtn.addEventListener('mouseup', (e) => {
+            e.preventDefault();
+            this.pttOff();
+        });
+        
+        pttBtn.addEventListener('mouseleave', () => {
+            if (this.pttActive) this.pttOff();
+        });
+        
+        document.addEventListener('keydown', (e) => {
+            if (e.code === this.pttHotkey && !e.repeat) {
+                e.preventDefault();
+                this.pttOn();
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            if (e.code === this.pttHotkey) {
+                e.preventDefault();
+                this.pttOff();
+            }
+        });
+    }
+    
     pttOn() {
         if (this.pttActive) return;
         this.pttActive = true;
         this.els.pttButton.classList.add('active');
         
-        this.socket.emit('audio_stop_rx');  // Stop RX while transmitting
+        this.socket.emit('audio_stop_rx');
         this.socket.emit('ptt_press');
         this.startMicrophone();
     }
@@ -363,7 +379,31 @@ class UVK5Remote {
         
         this.socket.emit('ptt_release');
         this.stopMicrophone();
-        this.socket.emit('audio_start_rx');  // Resume RX after transmitting
+        this.socket.emit('audio_start_rx');
+    }
+    
+    // ============================================================
+    // Controls
+    // ============================================================
+    
+    setupControls() {
+        document.getElementById('sq-down').addEventListener('click', () => {
+            this.setSquelch(Math.max(0, this.squelch - 1));
+        });
+        document.getElementById('sq-up').addEventListener('click', () => {
+            this.setSquelch(Math.min(9, this.squelch + 1));
+        });
+        
+        document.getElementById('vol-down').addEventListener('click', () => {
+            this.setVolume(Math.max(0, this.volume - 1));
+        });
+        document.getElementById('vol-up').addEventListener('click', () => {
+            this.setVolume(Math.min(15, this.volume + 1));
+        });
+        
+        this.els.powerToggle.addEventListener('click', () => {
+            this.setTxPower(this.txPower === 'LOW' ? 'HIGH' : 'LOW');
+        });
     }
     
     setSquelch(level) {
@@ -401,7 +441,7 @@ class UVK5Remote {
     }
     
     // ============================================================
-    // Audio (Microphone for TX, Speaker for RX)
+    // Audio (Microphone TX + Speaker RX with Level Analysis)
     // ============================================================
     
     async startMicrophone() {
@@ -422,6 +462,15 @@ class UVK5Remote {
                 }
             });
             
+            // Create TX analyser for level monitoring
+            const micSource = this.audioContext.createMediaStreamSource(this.micStream);
+            this.txAnalyser = this.audioContext.createAnalyser();
+            this.txAnalyser.fftSize = 256;
+            this.txAnalyser.smoothingTimeConstant = 0.5;
+            this.txDataArray = new Uint8Array(this.txAnalyser.frequencyBinCount);
+            micSource.connect(this.txAnalyser);
+            // Don't connect analyser to destination
+            
             // Use MediaRecorder with Opus codec
             const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
                 ? 'audio/webm;codecs=opus'
@@ -429,7 +478,7 @@ class UVK5Remote {
             
             this.mediaRecorder = new MediaRecorder(this.micStream, {
                 mimeType: mimeType,
-                audioBitsPerSecond: 24000  // 24 kbit/s
+                audioBitsPerSecond: 24000
             });
             
             this.mediaRecorder.ondataavailable = (e) => {
@@ -447,7 +496,6 @@ class UVK5Remote {
                 }
             };
             
-            // Send in 20ms chunks (Opus frame size)
             this.mediaRecorder.start(20);
             console.log('Microphone streaming started (Opus, 24kbit/s)');
             
@@ -465,31 +513,43 @@ class UVK5Remote {
             this.micStream.getTracks().forEach(t => t.stop());
             this.micStream = null;
         }
+        // Clear TX analyser
+        this.txAnalyser = null;
+        this.txDataArray = null;
+        
+        // Reset TX bar
+        if (this.els.txBarFill) this.els.txBarFill.style.height = '0%';
+        if (this.els.txDb) {
+            this.els.txDb.textContent = '-∞ dB';
+            this.els.txDb.className = 'level-bar-value';
+        }
+        if (this.els.txClip) this.els.txClip.classList.remove('clipping');
     }
     
-    playRxAudio(data) {
-        if (!this.audioContext) return;
+    processRxAudio(data) {
+        if (!this.audioContext) {
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 16000
+            });
+        }
         
         try {
+            let float32Array = null;
+            
             if (data.codec === 'opus') {
-                // Raw Opus frame from backend
-                // Decode via AudioContext + custom decoder
                 const binary = atob(data.data);
                 const bytes = new Uint8Array(binary.length);
                 for (let i = 0; i < binary.length; i++) {
                     bytes[i] = binary.charCodeAt(i);
                 }
                 
-                // Decode Opus → PCM using the Web Audio API workaround
-                // For raw opus we need a decoder - use the opus-decoder library
-                // Fallback: if opus-decoder not loaded, skip
                 if (this.opusDecoder) {
                     this.opusDecoder.decodeFrame(bytes).then(pcm => {
-                        this._playPcmFloat(pcm);
+                        this._playAndAnalyzeRx(pcm);
                     });
+                    return;
                 }
             } else if (data.codec === 'pcm') {
-                // Raw PCM fallback
                 const binary = atob(data.data);
                 const bytes = new Uint8Array(binary.length);
                 for (let i = 0; i < binary.length; i++) {
@@ -500,26 +560,103 @@ class UVK5Remote {
                 for (let i = 0; i < int16.length; i++) {
                     float32[i] = int16[i] / 0x8000;
                 }
-                this._playPcmFloat(float32);
+                float32Array = float32;
+            }
+            
+            if (float32Array) {
+                this._playAndAnalyzeRx(float32Array);
             }
         } catch (err) {
             console.error('RX audio playback error:', err);
         }
     }
     
-    _playPcmFloat(float32Array) {
+    _playAndAnalyzeRx(float32Array) {
         if (!this.audioContext) return;
+        
         const buffer = this.audioContext.createBuffer(1, float32Array.length, 16000);
         buffer.copyToChannel(float32Array, 0);
+        
         const source = this.audioContext.createBufferSource();
         source.buffer = buffer;
-        source.connect(this.audioContext.destination);
+        
+        // Create or reuse RX analyser
+        if (!this.rxAnalyser) {
+            this.rxAnalyser = this.audioContext.createAnalyser();
+            this.rxAnalyser.fftSize = 256;
+            this.rxAnalyser.smoothingTimeConstant = 0.5;
+            this.rxDataArray = new Uint8Array(this.rxAnalyser.frequencyBinCount);
+            this.rxAnalyser.connect(this.audioContext.destination);
+        }
+        
+        source.connect(this.rxAnalyser);
         source.start();
     }
     
     // ============================================================
     // Connection Management
     // ============================================================
+    
+    setupSettings() {
+        this.els.btnRefreshPorts.addEventListener('click', () => this.refreshPorts());
+        this.els.btnConnect.addEventListener('click', () => this.connectRadio());
+        this.els.btnDisconnect.addEventListener('click', () => this.disconnectRadio());
+        
+        this.els.audioPlayback = document.getElementById('audio-playback');
+        this.els.audioCapture = document.getElementById('audio-capture');
+        this.els.btnRefreshAudio = document.getElementById('btn-refresh-audio');
+        
+        this.els.btnRefreshAudio.addEventListener('click', () => this.refreshAudioDevices());
+        this.els.audioPlayback.addEventListener('change', () => this.setAudioConfig());
+        this.els.audioCapture.addEventListener('change', () => this.setAudioConfig());
+        
+        this.els.radioTypeSelect.addEventListener('change', () => this.setRadioType());
+        
+        // Tabs
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            });
+        });
+        
+        // PTT Hotkey
+        this.els.hotkeyBtn = document.getElementById('ptt-hotkey-btn');
+        this.els.hotkeyHint = document.getElementById('hotkey-hint');
+        this.els.hotkeyBtn.textContent = this.pttHotkey;
+        
+        this.els.hotkeyBtn.addEventListener('click', () => this.startHotkeyListen());
+        
+        // Load ports, audio devices, and radio types on open
+        this.refreshPorts();
+        this.refreshAudioDevices();
+        this.refreshRadioTypes();
+        
+        // Audio streaming state
+        this.micStream = null;
+        this.mediaRecorder = null;
+        this.opusDecoder = null;
+        this.rxAudioQueue = [];
+        this.rxPlaying = false;
+        
+        this._initOpusDecoder();
+    }
+    
+    async _initOpusDecoder() {
+        try {
+            if (typeof OpusDecoder !== 'undefined') {
+                this.opusDecoder = new OpusDecoder();
+                await this.opusDecoder.ready;
+                console.log('Opus decoder initialized');
+            } else {
+                console.warn('Opus decoder library not loaded, RX will use PCM fallback');
+            }
+        } catch (err) {
+            console.warn('Opus decoder init failed:', err);
+        }
+    }
     
     async refreshPorts() {
         try {
@@ -552,7 +689,6 @@ class UVK5Remote {
             if (data.success) {
                 this.updateConnectionStatus(true);
                 console.log('Radio connected' + (data.simulated ? ' (simulated)' : ''));
-                // Start RX audio stream
                 this.socket.emit('audio_start_rx');
             }
         } catch (err) {
@@ -607,30 +743,27 @@ class UVK5Remote {
     }
     
     // ============================================================
-    // S-Meter
+    // S-Meter (as upward bar, unified with level bars)
     // ============================================================
     
     updateSMeter(value) {
         // value: 0-9 = S0-S9, 10-12 = +20/+40/+60
         // Map to percentage: S0=0%, S9=56%, +60=100%
         const pct = Math.min(100, (value / 12) * 100);
-        this.els.smeterFill.style.width = pct + '%';
+        this.els.smeterFill.style.height = pct + '%';
         
-        // Format display text
         let text;
         if (value === 0) {
             text = 'S0';
-            this.els.smeterValue.className = 'smeter-value no-signal';
         } else if (value <= 9) {
             text = 'S' + value;
-            this.els.smeterValue.className = 'smeter-value';
         } else {
             const db = (value - 9) * 20;
             text = 'S9+' + db;
-            this.els.smeterValue.className = 'smeter-value s9-plus';
         }
-        this.els.smeterValue.textContent = text;
+        this.els.smeterDb.textContent = text;
     }
+    
     // ============================================================
     // Audio Device Management
     // ============================================================
@@ -640,7 +773,6 @@ class UVK5Remote {
             const resp = await fetch('/api/audio/devices');
             const devices = await resp.json();
             
-            // Populate playback dropdown
             this.els.audioPlayback.innerHTML = '<option value="">Default</option>';
             (devices.playback || []).forEach(dev => {
                 const opt = document.createElement('option');
@@ -649,7 +781,6 @@ class UVK5Remote {
                 this.els.audioPlayback.appendChild(opt);
             });
             
-            // Populate capture dropdown
             this.els.audioCapture.innerHTML = '<option value="">Default</option>';
             (devices.capture || []).forEach(dev => {
                 const opt = document.createElement('option');
@@ -658,7 +789,6 @@ class UVK5Remote {
                 this.els.audioCapture.appendChild(opt);
             });
             
-            // Load current config
             const configResp = await fetch('/api/audio/config');
             const config = await configResp.json();
             if (config.playback) this.els.audioPlayback.value = config.playback;
@@ -703,7 +833,6 @@ class UVK5Remote {
                 this.els.radioTypeSelect.appendChild(opt);
             });
             
-            // Load current selection
             const currentResp = await fetch('/api/radio-type');
             const current = await currentResp.json();
             if (current.type) this.els.radioTypeSelect.value = current.type;
@@ -724,7 +853,7 @@ class UVK5Remote {
             const result = await resp.json();
             if (result.success) {
                 console.log(`Switched to ${result.label}`);
-                this.refreshPorts(); // Ports may differ
+                this.refreshPorts();
             }
         } catch (err) {
             console.error('Set radio type error:', err);
@@ -744,7 +873,6 @@ class UVK5Remote {
             e.preventDefault();
             e.stopPropagation();
             
-            // Ignore modifier-only presses
             if (['ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight'].includes(e.code)) {
                 return;
             }
@@ -752,7 +880,6 @@ class UVK5Remote {
             this.pttHotkey = e.code;
             localStorage.setItem('ptt_hotkey', e.code);
             
-            // Friendly name
             const name = e.code
                 .replace('Key', '')
                 .replace('Digit', '')
