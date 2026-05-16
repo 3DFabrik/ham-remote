@@ -360,6 +360,8 @@ app = Flask(__name__,
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'uvk5-remote-dev-key')
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # No static file cache
+app.jinja_env.auto_reload = True
+app.jinja_env.cache_size = 0  # Disable Jinja template bytecode cache
 
 socketio = SocketIO(app, cors_allowed_origins='*', async_mode='eventlet')
 

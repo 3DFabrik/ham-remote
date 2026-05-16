@@ -363,7 +363,7 @@ class UVK5Remote {
         });
     }
     
-    pttOn() {
+    async pttOn() {
         if (this.pttActive) return;
         this.pttActive = true;
         this.els.pttButton.classList.add('active');
@@ -371,7 +371,24 @@ class UVK5Remote {
         
         this.socket.emit('audio_stop_rx');
         this.socket.emit('ptt_press');
-        this.startMicrophone();
+        
+        try {
+            await this.startMicrophone();
+            console.log('[PTT] Mic started successfully');
+        } catch (err) {
+            console.error('[PTT] Mic start failed:', err);
+            // Show error briefly on PTT button
+            const hint = this.els.pttButton.querySelector('.ptt-hint');
+            if (hint) {
+                hint.textContent = '⚠️ Mic Error: ' + err.message;
+                hint.style.color = '#f44';
+                setTimeout(() => {
+                    hint.textContent = 'Hold to talk';
+                    hint.style.color = '';
+                }, 3000);
+            }
+            // Still in PTT state but no audio – user needs to release
+        }
     }
     
     pttOff() {
@@ -514,7 +531,8 @@ class UVK5Remote {
             console.log('Microphone streaming started (Opus, 24kbit/s)');
             
         } catch (err) {
-            console.error('Microphone access denied:', err);
+            console.error('[MIC] startMicrophone failed:', err);
+            throw err;  // Re-throw so pttOn can handle it
         }
     }
     
