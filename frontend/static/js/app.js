@@ -593,56 +593,69 @@ class UVK5Remote {
         }
     }
     
-    _playAndAnalyzeRx(float32Array) {
-        if (!this.audioContext) return;
-        
-        // Simple jitter buffer: accumulate frames, play when ready
-        if (!this._rxJitterBuf) {
-            this._rxJitterBuf = [];
-            this._rxNextTime = 0;
-            this._rxStarted = false;
+    _initAudioPipeline() {
+        if (!this.audioContext) {
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 16000
+            });
         }
         
-        // Create or reuse RX analyser
-        if (!this.rxAnalyser) {
-            this.rxAnalyser = this.audioContext.createAnalyser();
-            this.rxAnalyser.fftSize = 256;
-            this.rxAnalyser.smoothingTimeConstant = 0.5;
-            this.rxDataArray = new Uint8Array(this.rxAnalyser.frequencyBinCount);
-            this.rxAnalyser.connect(this.audioContext.destination);
-        }
+        // Ring buffer for RX audio
+        this._rxRingBuf = new Float32Array(16000 * 2); // 2 seconds buffer
+        this._rxWritePos = 0;
+        this._rxReadPos = 0;
+        this._rxBufSamples = 0;
         
-        const buffer = this.audioContext.createBuffer(1, float32Array.length, 16000);
-        buffer.copyToChannel(float32Array, 0);
-        const source = this.audioContext.createBufferSource();
-        source.buffer = buffer;
-        source.connect(this.rxAnalyser);
+        // ScriptProcessor reads from ring buffer continuously
+        const processor = this.audioContext.createScriptProcessor(4096, 1, 1);
         
-        // First few frames: buffer them to absorb jitter
-        if (!this._rxStarted) {
-            this._rxJitterBuf.push(source);
-            if (this._rxJitterBuf.length >= 3) {
-                // Drain buffer
-                this._rxNextTime = this.audioContext.currentTime + 0.01;
-                while (this._rxJitterBuf.length > 0) {
-                    const s = this._rxJitterBuf.shift();
-                    s.start(this._rxNextTime);
-                    this._rxNextTime += s.buffer.duration;
+        // Create RX analyser
+        this.rxAnalyser = this.audioContext.createAnalyser();
+        this.rxAnalyser.fftSize = 256;
+        this.rxAnalyser.smoothingTimeConstant = 0.5;
+        this.rxDataArray = new Uint8Array(this.rxAnalyser.frequencyBinCount);
+        
+        processor.onaudioprocess = (e) => {
+            const output = e.outputBuffer.getChannelData(0);
+            const len = output.length;
+            
+            if (this._rxBufSamples >= len) {
+                // Read from ring buffer
+                for (let i = 0; i < len; i++) {
+                    output[i] = this._rxRingBuf[this._rxReadPos];
+                    this._rxReadPos = (this._rxReadPos + 1) % this._rxRingBuf.length;
                 }
-                this._rxStarted = true;
+                this._rxBufSamples -= len;
+            } else {
+                // Not enough data - output silence
+                for (let i = 0; i < len; i++) output[i] = 0;
             }
-            return;
+        };
+        
+        processor.connect(this.rxAnalyser);
+        this.rxAnalyser.connect(this.audioContext.destination);
+        this._rxProcessor = processor;
+        this._rxPipelineReady = true;
+        console.log('RX audio pipeline initialized (ring buffer + ScriptProcessor)');
+    }
+    
+    _playAndAnalyzeRx(float32Array) {
+        if (!this._rxPipelineReady) {
+            this._initAudioPipeline();
         }
         
-        // Normal playback: schedule right after previous
-        const now = this.audioContext.currentTime;
-        const startTime = Math.max(this._rxNextTime, now);
-        source.start(startTime);
-        this._rxNextTime = startTime + buffer.duration;
+        // Write PCM data into ring buffer
+        for (let i = 0; i < float32Array.length; i++) {
+            this._rxRingBuf[this._rxWritePos] = float32Array[i];
+            this._rxWritePos = (this._rxWritePos + 1) % this._rxRingBuf.length;
+        }
+        this._rxBufSamples += float32Array.length;
         
-        // Reset if we get too far ahead ( > 500ms buffer)
-        if (this._rxNextTime - now > 0.5) {
-            this._rxNextTime = now;
+        // Cap buffer at 1 second to prevent drift
+        if (this._rxBufSamples > 16000) {
+            const excess = this._rxBufSamples - 16000;
+            this._rxReadPos = (this._rxReadPos + excess) % this._rxRingBuf.length;
+            this._rxBufSamples = 16000;
         }
     }
     
