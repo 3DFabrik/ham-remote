@@ -539,6 +539,10 @@ class XieguX6100Radio(UVK5Radio):
                 radio_id = resp[5] if len(resp) > 5 else 0
                 logger.info(f"X6100 radio ID: 0x{radio_id:02X}")
             
+            # Read initial frequency
+            self.get_frequency()
+            logger.info(f"X6100 initial freq: {self.current_freq} MHz")
+            
             self._running = True
             self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
             self._monitor_thread.start()
@@ -552,6 +556,7 @@ class XieguX6100Radio(UVK5Radio):
         """Set frequency, immediately read back and push to frontend."""
         freq_hz = int(freq_mhz * 1_000_000)
         bcd = self._freq_to_civ_bcd(freq_hz)
+        self._freq_set_at = time.time()  # suppress monitor freq reads
         resp = self._send_civ(self.CMD_FREQ_SET, data=bcd)
         if resp:
             # Immediately read back confirmed frequency
@@ -627,13 +632,16 @@ class XieguX6100Radio(UVK5Radio):
         while self._running:
             try:
                 if self.connected and not SIMULATE:
-                    # Only read S-meter here, NOT frequency
-                    # Frequency is updated via set_frequency readback only
+                    # Skip freq read right after a set (avoid stale echo)
+                    if time.time() - self._freq_set_at > 2.0:
+                        self.get_frequency()
+                    
+                    # Read S-meter
                     resp = self._send_civ(self.CMD_SMETER_READ, subcmd=0x02)
                     if resp and len(resp) >= 7:
                         raw = resp[5] if len(resp) > 5 else 0
                         self.smeter_value = self._raw_to_smeter(raw)
-                        socketio.emit('radio_update', self.get_status())
+                    socketio.emit('radio_update', self.get_status())
                 elif self.connected and SIMULATE:
                     import random
                     self.smeter_value = random.choice([3, 4, 5, 5, 6, 6, 7])
