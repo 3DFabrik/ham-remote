@@ -363,7 +363,7 @@ app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # No static file cache
 app.jinja_env.auto_reload = True
 app.jinja_env.cache_size = 0  # Disable Jinja template bytecode cache
 
-socketio = SocketIO(app, cors_allowed_origins='*', async_mode='eventlet', logger=True, engineio_logger=True)
+socketio = SocketIO(app, cors_allowed_origins='*', async_mode='eventlet')
 
 # Register all radio drivers
 register_radio('uvk5', 'Quansheng UV-K5', 'Via AIOC cable, 38400 baud', 38400, UVK5Radio)
