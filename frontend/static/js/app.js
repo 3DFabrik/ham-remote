@@ -335,34 +335,27 @@ class UVK5Remote {
     setupPTT() {
         const pttBtn = this.els.pttButton;
         
-        // CRITICAL: Request getUserMedia IMMEDIATELY in the sync event handler
-        // so the browser sees it as a user gesture. Store the promise for
-        // startMicrophone() to await later.
-        const requestMic = () => {
-            this._pendingMicPromise = navigator.mediaDevices.getUserMedia({
-                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
-            }).catch(err => {
-                this._log('[MIC] getUserMedia failed: ' + err.name + ': ' + err.message);
-                return null;
-            });
-        };
-        
-        pttBtn.addEventListener('pointerdown', (e) => {
+        pttBtn.addEventListener('mousedown', (e) => {
             e.preventDefault();
-            if (!this.pttActive) requestMic();
             this.pttOn();
         });
-        
-        pttBtn.addEventListener('pointerup', (e) => {
+        pttBtn.addEventListener('mouseup', (e) => {
             e.preventDefault();
             this.pttOff();
         });
-        
-        pttBtn.addEventListener('pointerleave', () => {
+        pttBtn.addEventListener('mouseleave', () => {
             if (this.pttActive) this.pttOff();
         });
         
-        pttBtn.addEventListener('pointercancel', (e) => {
+        pttBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            this.pttOn();
+        });
+        pttBtn.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            this.pttOff();
+        });
+        pttBtn.addEventListener('touchcancel', (e) => {
             e.preventDefault();
             this.pttOff();
         });
@@ -370,11 +363,9 @@ class UVK5Remote {
         document.addEventListener('keydown', (e) => {
             if (e.code === this.pttHotkey && !e.repeat) {
                 e.preventDefault();
-                if (!this.pttActive) requestMic();
                 this.pttOn();
             }
         });
-        
         document.addEventListener('keyup', (e) => {
             if (e.code === this.pttHotkey) {
                 e.preventDefault();
@@ -383,38 +374,33 @@ class UVK5Remote {
         });
     }
     
-    async pttOn() {
+    pttOn() {
         if (this.pttActive) return;
         this.pttActive = true;
         this.els.pttButton.classList.add('active');
-        this._log('[PTT] PTT pressed – starting mic...');
+        this._log('[PTT] pressed');
         
         this.socket.emit('audio_stop_rx');
         this.socket.emit('ptt_press');
         
-        try {
-            await this.startMicrophone();
-            this._log('[PTT] Mic started successfully');
-        } catch (err) {
-            console.error('[PTT] Mic start failed:', err);
-            // Show error briefly on PTT button
+        // Start mic directly - getUserMedia works in mousedown/touchstart context
+        this.startMicrophone().then(() => {
+            this._log('[PTT] mic OK');
+        }).catch(err => {
+            this._log('[PTT] ERROR: ' + err.name + ': ' + err.message);
             const hint = this.els.pttButton.querySelector('.ptt-hint');
             if (hint) {
-                hint.textContent = '⚠️ Mic Error: ' + err.message;
+                hint.textContent = 'Error: ' + err.message;
                 hint.style.color = '#f44';
-                setTimeout(() => {
-                    hint.textContent = 'Hold to talk';
-                    hint.style.color = '';
-                }, 3000);
+                setTimeout(() => { hint.textContent = 'Hold to talk'; hint.style.color = ''; }, 3000);
             }
-            // Still in PTT state but no audio – user needs to release
-        }
+        });
     }
     
     pttOff() {
         if (!this.pttActive) return;
         this.pttActive = false;
-        this._log('[PTT] PTT released – stopping mic');
+        this._log('[PTT] released');
         this.els.pttButton.classList.remove('active');
         
         this.socket.emit('ptt_release');
@@ -485,65 +471,43 @@ class UVK5Remote {
     // ============================================================
     
     async startMicrophone() {
+        this._log('[MIC] startMicrophone called');
+        
         try {
-            this._log('[MIC] startMicrophone called');
-            
             if (!this.audioContext) {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                    sampleRate: 16000
-                });
-                this._log('[MIC] AudioContext created, state: ' + this.audioContext.state);
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                this._log('[MIC] AudioContext: ' + this.audioContext.state);
             }
             
-            // Resume AudioContext if suspended (browser autoplay policy)
             if (this.audioContext.state === 'suspended') {
-                this._log('[MIC] Resuming suspended AudioContext...');
                 await this.audioContext.resume();
-                this._log('[MIC] AudioContext state now: ' + this.audioContext.state);
+                this._log('[MIC] resumed: ' + this.audioContext.state);
             }
             
-            // Use pre-requested mic stream from pointerdown (user gesture context)
-            if (this._pendingMicPromise) {
-                this._log('[MIC] Awaiting pre-requested mic stream...');
-                this.micStream = await this._pendingMicPromise;
-                this._pendingMicPromise = null;
-                if (!this.micStream) {
-                    throw new Error('getUserMedia returned null');
-                }
-            } else {
-                // Fallback: request mic directly (may fail without user gesture)
-                this._log('[MIC] No pre-requested stream, requesting getUserMedia...');
-                this.micStream = await navigator.mediaDevices.getUserMedia({
-                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
-                });
-            }
-            this._log('[MIC] Got mic stream: ' + this.micStream.getTracks().length + ' tracks');
+            this._log('[MIC] getUserMedia...');
+            this.micStream = await navigator.mediaDevices.getUserMedia({
+                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
+            });
+            this._log('[MIC] stream OK: ' + this.micStream.getTracks()[0].label);
             
-            // Set up TX analyser for level monitoring
             const micSource = this.audioContext.createMediaStreamSource(this.micStream);
             this.txAnalyser = this.audioContext.createAnalyser();
             this.txAnalyser.fftSize = 256;
             this.txAnalyser.smoothingTimeConstant = 0.5;
             this.txDataArray = new Uint8Array(this.txAnalyser.frequencyBinCount);
             micSource.connect(this.txAnalyser);
+            this._log('[MIC] analyser connected');
             
-            // Use MediaRecorder with Opus codec
             const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-                ? 'audio/webm;codecs=opus'
-                : 'audio/ogg;codecs=opus';
+                ? 'audio/webm;codecs=opus' : 'audio/ogg;codecs=opus';
             
-            this.mediaRecorder = new MediaRecorder(this.micStream, {
-                mimeType: mimeType,
-                audioBitsPerSecond: 24000
-            });
-            
+            this.mediaRecorder = new MediaRecorder(this.micStream, { mimeType, audioBitsPerSecond: 24000 });
             this.mediaRecorder.ondataavailable = (e) => {
                 if (e.data.size > 0 && this.pttActive) {
                     const reader = new FileReader();
                     reader.onload = () => {
-                        const base64 = reader.result.split(',')[1];
                         this.socket.emit('audio_rx', {
-                            data: base64,
+                            data: reader.result.split(',')[1],
                             codec: 'opus-webm',
                             sampleRate: 16000
                         });
@@ -551,13 +515,11 @@ class UVK5Remote {
                     reader.readAsDataURL(e.data);
                 }
             };
-            
             this.mediaRecorder.start(20);
-            this._log('[MIC] MediaRecorder started (Opus, 24kbit/s)');
-            
+            this._log('[MIC] recorder started: ' + mimeType);
         } catch (err) {
-            console.error('[MIC] startMicrophone failed:', err);
-            throw err;  // Re-throw so pttOn can handle it
+            this._log('[MIC] FAILED: ' + err.name + ': ' + err.message);
+            throw err;
         }
     }
     
