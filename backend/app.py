@@ -453,7 +453,7 @@ class XieguX6100Radio(UVK5Radio):
     
     # CI-V commands (Icom-compatible)
     CMD_FREQ_SET = 0x00    # Set frequency (SubCMD=0x00, data=5 bytes BCD)
-    CMD_FREQ_READ = 0x00   # Read frequency (SubCMD=0x03)
+    CMD_FREQ_READ = 0x03   # Read frequency (no subcmd)
     CMD_MODE_SET = 0x06    # Set mode
     CMD_MODE_READ = 0x04   # Read mode
     CMD_PTT_ON = 0x08     # PTT On (via 0x1C 0x00)
@@ -482,8 +482,8 @@ class XieguX6100Radio(UVK5Radio):
         frame += data + bytes([0xFD])
         return frame
     
-    def _send_civ(self, cmd, subcmd=None, data=b''):
-        """Send CI-V command and read response."""
+    def _send_civ(self, cmd, subcmd=None, data=b'', expect_response=True):
+        """Send CI-V command and optionally read response."""
         if not self.serial or not self.serial.is_open:
             return None
         frame = self._build_civ(cmd, subcmd, data)
@@ -491,11 +491,11 @@ class XieguX6100Radio(UVK5Radio):
             try:
                 self.serial.reset_input_buffer()
                 self.serial.write(frame)
+                if not expect_response:
+                    return None  # Fire and forget
                 # Read response: FE [FE] FROM TO CMD [SUBCMD] [DATA] FD
-                # X6100 sometimes sends 1 FE, sometimes 2
-                # Try multiple reads to get the full response
                 resp = b''
-                deadline = time.time() + 1.5
+                deadline = time.time() + 1.0
                 while time.time() < deadline:
                     chunk = self.serial.read(30)
                     if chunk:
@@ -515,12 +515,10 @@ class XieguX6100Radio(UVK5Radio):
                         resp = resp[idx-1:]  # Keep one FE
                         resp = b'\xFE\xFE' + resp[1:]  # Normalize to 2 FE
                     if len(resp) >= 6 and resp[0] == 0xFE:
-                        # Verify response command matches
                         resp_cmd = resp[4] if len(resp) > 4 else 0
                         if resp_cmd == 0xFB:  # ACK/NACK
                             return resp
                         if resp_cmd == cmd:
-                            # Also check subcmd if we sent one
                             if subcmd is not None and len(resp) > 5:
                                 if resp[5] != subcmd:
                                     return None  # Wrong subcmd
@@ -573,12 +571,13 @@ class XieguX6100Radio(UVK5Radio):
         freq_hz = int(freq_mhz * 1_000_000)
         bcd = self._freq_to_civ_bcd(freq_hz)
         self._freq_set_at = time.time()  # suppress monitor freq reads
-        resp = self._send_civ(self.CMD_FREQ_SET, subcmd=0x00, data=bcd)
-        if resp:
-            # Immediately read back confirmed frequency
-            confirmed = self.get_frequency()
-            if confirmed:
-                socketio.emit('radio_update', self.get_status())
+        # Set command (no response expected for CMD 0x00)
+        self._send_civ(self.CMD_FREQ_SET, subcmd=0x00, data=bcd, expect_response=False)
+        # Immediately read back confirmed frequency
+        time.sleep(0.1)  # Brief pause for radio to process
+        confirmed = self.get_frequency()
+        if confirmed:
+            socketio.emit('radio_update', self.get_status())
     
     def _freq_to_civ_bcd(self, freq_hz):
         """Convert Hz to CI-V BCD (5 bytes, MSB first per X6100 manual Table 2-1).
@@ -623,12 +622,12 @@ class XieguX6100Radio(UVK5Radio):
     
     def get_frequency(self):
         """Read current frequency from X6100."""
-        resp = self._send_civ(self.CMD_FREQ_READ, subcmd=0x03)
+        resp = self._send_civ(self.CMD_FREQ_READ)
         if resp:
             logger.info(f"X6100 freq response: {resp.hex(' ')} ({len(resp)} bytes)")
-        if resp and len(resp) >= 11:
-            # Response: FE FE FROM TO CMD(0x00) SUBCMD(0x03) [5 BCD] FD
-            freq_hz = self._civ_bcd_to_freq(resp[6:11])
+        if resp and len(resp) >= 10:
+            # Response: FE FE FROM TO 03 [5 BCD] FD
+            freq_hz = self._civ_bcd_to_freq(resp[5:10])
             self.current_freq = freq_hz / 1_000_000
             logger.info(f"X6100 freq decoded: {self.current_freq} MHz")
             return self.current_freq
@@ -644,9 +643,9 @@ class XieguX6100Radio(UVK5Radio):
     def set_ptt(self, active):
         """PTT via CI-V (uses 0x1C 0x00 command)."""
         if active:
-            self._send_civ(0x1C, subcmd=0x00, data=bytes([0x01]))  # TX
+            self._send_civ(0x1C, subcmd=0x00, data=bytes([0x01]), expect_response=False)  # TX
         else:
-            self._send_civ(0x1C, subcmd=0x00, data=bytes([0x02]))  # RX
+            self._send_civ(0x1C, subcmd=0x00, data=bytes([0x02]), expect_response=False)  # RX
         self.ptt_active = active
     
     def get_status(self):
