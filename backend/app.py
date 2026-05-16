@@ -409,19 +409,12 @@ class YaesuCATRadio(UVK5Radio):
         while self._running:
             try:
                 if self.connected and not SIMULATE:
-                    # Read frequency
-                    self.get_frequency()
-                    
-                    # Read S-meter / status
+                    # Only read S-meter, NOT frequency (updated via set readback)
                     resp = self._send_cat(self.CMD_GET_STATUS)
                     if resp and len(resp) == 5:
-                        # Byte 2 (index 1) contains S-meter value for some models
-                        # Byte 3-4 contain status flags
                         raw = resp[1]
                         self.smeter_value = self._raw_to_smeter(raw)
-                        
-                        # Check PTT status from flags
-                        # Bit flags in response indicate PTT state, etc.
+                    socketio.emit('radio_update', self.get_status())
                     
                 elif self.connected and SIMULATE:
                     import random
@@ -634,13 +627,13 @@ class XieguX6100Radio(UVK5Radio):
         while self._running:
             try:
                 if self.connected and not SIMULATE:
-                    self.get_frequency()
-                    
-                    # Read S-meter
+                    # Only read S-meter here, NOT frequency
+                    # Frequency is updated via set_frequency readback only
                     resp = self._send_civ(self.CMD_SMETER_READ, subcmd=0x02)
                     if resp and len(resp) >= 7:
                         raw = resp[5] if len(resp) > 5 else 0
                         self.smeter_value = self._raw_to_smeter(raw)
+                        socketio.emit('radio_update', self.get_status())
                 elif self.connected and SIMULATE:
                     import random
                     self.smeter_value = random.choice([3, 4, 5, 5, 6, 6, 7])
