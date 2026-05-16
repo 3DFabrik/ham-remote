@@ -452,7 +452,7 @@ class XieguX6100Radio(UVK5Radio):
     CONTROLLER_ADDR = 0x00  # Controller (us)
     
     # CI-V commands (Icom-compatible)
-    CMD_FREQ_SET = 0x00    # Set frequency (SubCMD=0x00, data=5 bytes BCD)
+    CMD_FREQ_SET = 0x05    # Set frequency (5 bytes BCD, no subcmd)
     CMD_FREQ_READ = 0x03   # Read frequency (no subcmd)
     CMD_MODE_SET = 0x06    # Set mode
     CMD_MODE_READ = 0x04   # Read mode
@@ -570,11 +570,12 @@ class XieguX6100Radio(UVK5Radio):
         """Set frequency, immediately read back and push to frontend."""
         freq_hz = int(freq_mhz * 1_000_000)
         bcd = self._freq_to_civ_bcd(freq_hz)
-        self._freq_set_at = time.time()  # suppress monitor freq reads
-        # Set command (no response expected for CMD 0x00)
-        self._send_civ(self.CMD_FREQ_SET, subcmd=0x00, data=bcd, expect_response=False)
-        # Immediately read back confirmed frequency
-        time.sleep(0.1)  # Brief pause for radio to process
+        self._freq_set_at = time.time()  # suppress monitor
+        # Set command (no response expected)
+        self._send_civ(self.CMD_FREQ_SET, data=bcd, expect_response=False)
+        # Wait for radio to process
+        time.sleep(0.3)
+        # Read back confirmed frequency
         confirmed = self.get_frequency()
         if confirmed:
             socketio.emit('radio_update', self.get_status())
@@ -668,12 +669,16 @@ class XieguX6100Radio(UVK5Radio):
         while self._running:
             try:
                 if self.connected:
-                    # Read S-meter only (freq updated via set_frequency readback)
+                    # Skip S-meter polling during freq changes to avoid serial collision
+                    if time.time() - self._freq_set_at < 3.0:
+                        eventlet.sleep(0.5)
+                        continue
                     resp = self._send_civ(self.CMD_SMETER_READ, subcmd=0x02)
                     if resp and len(resp) >= 7:
                         raw = resp[5] if len(resp) > 5 else 0
                         self.smeter_value = self._raw_to_smeter(raw)
                     socketio.emit('radio_update', self.get_status())
+                eventlet.sleep(2.0)
             except Exception as e:
                 logger.error(f"X6100 monitor error: {e}")
                 eventlet.sleep(5.0)
