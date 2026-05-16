@@ -460,8 +460,8 @@ class XieguX6100Radio(UVK5Radio):
     CONTROLLER_ADDR = 0x00  # Controller (us)
     
     # CI-V commands (Icom-compatible)
-    CMD_FREQ_SET = 0x05    # Set frequency
-    CMD_FREQ_READ = 0x03   # Read frequency
+    CMD_FREQ_SET = 0x00    # Set frequency (SubCMD=0x00, data=5 bytes BCD)
+    CMD_FREQ_READ = 0x00   # Read frequency (SubCMD=0x03)
     CMD_MODE_SET = 0x06    # Set mode
     CMD_MODE_READ = 0x04   # Read mode
     CMD_PTT_ON = 0x08     # PTT On (via 0x1C 0x00)
@@ -525,7 +525,13 @@ class XieguX6100Radio(UVK5Radio):
                     if len(resp) >= 6 and resp[0] == 0xFE:
                         # Verify response command matches
                         resp_cmd = resp[4] if len(resp) > 4 else 0
-                        if resp_cmd == cmd or resp_cmd == 0xFB:
+                        if resp_cmd == 0xFB:  # ACK/NACK
+                            return resp
+                        if resp_cmd == cmd:
+                            # Also check subcmd if we sent one
+                            if subcmd is not None and len(resp) > 5:
+                                if resp[5] != subcmd:
+                                    return None  # Wrong subcmd
                             return resp
                 return None
             except serial.SerialException as e:
@@ -575,7 +581,7 @@ class XieguX6100Radio(UVK5Radio):
         freq_hz = int(freq_mhz * 1_000_000)
         bcd = self._freq_to_civ_bcd(freq_hz)
         self._freq_set_at = time.time()  # suppress monitor freq reads
-        resp = self._send_civ(self.CMD_FREQ_SET, data=bcd)
+        resp = self._send_civ(self.CMD_FREQ_SET, subcmd=0x00, data=bcd)
         if resp:
             # Immediately read back confirmed frequency
             confirmed = self.get_frequency()
@@ -583,33 +589,54 @@ class XieguX6100Radio(UVK5Radio):
                 socketio.emit('radio_update', self.get_status())
     
     def _freq_to_civ_bcd(self, freq_hz):
-        """Convert Hz to CI-V BCD (5 bytes, LSB first)."""
-        # CI-V uses Hz directly (not 10Hz units!)
-        digits = f"{freq_hz:010d}"  # 10 digits for 5 bytes
-        # Pack as BCD MSB-first, then reverse bytes for CI-V LSB-first
-        bcd_msb = b''
-        for i in range(5):
-            high = int(digits[2 * i])
-            low = int(digits[2 * i + 1])
-            bcd_msb += bytes([(high << 4) | low])
-        return bcd_msb[::-1]  # Reverse for CI-V wire order
+        """Convert Hz to CI-V BCD (5 bytes, MSB first per X6100 manual Table 2-1).
+        Byte 0: [10Hz][1Hz]
+        Byte 1: [1kHz][100Hz]
+        Byte 2: [100kHz][10kHz]
+        Byte 3: [10MHz][1MHz]
+        Byte 4: [1GHz][100MHz]
+        """
+        f = freq_hz
+        hz1 = f % 10; f //= 10
+        hz10 = f % 10; f //= 10
+        hz100 = f % 10; f //= 10
+        khz1 = f % 10; f //= 10
+        khz10 = f % 10; f //= 10
+        khz100 = f % 10; f //= 10
+        mhz1 = f % 10; f //= 10
+        mhz10 = f % 10; f //= 10
+        mhz100 = f % 10; f //= 10
+        ghz = f % 10
+        return bytes([
+            (hz10 << 4) | hz1,
+            (khz1 << 4) | hz100,
+            (khz100 << 4) | khz10,
+            (mhz10 << 4) | mhz1,
+            (ghz << 4) | mhz100
+        ])
     
     def _civ_bcd_to_freq(self, bcd_bytes):
-        """Convert CI-V BCD (5 bytes, LSB first) to Hz."""
-        # Reverse to MSB-first, then decode BCD
-        msb = bcd_bytes[::-1]
-        digits = ''
-        for b in msb:
-            digits += f'{(b >> 4) & 0x0F}{b & 0x0F}'
-        return int(digits)  # Already in Hz, not 10Hz units!
+        """Convert CI-V BCD (5 bytes per X6100 manual Table 2-1) to Hz."""
+        d = bcd_bytes
+        return ((d[4] >> 4) & 0xF) * 1_000_000_000 + \
+               (d[4] & 0xF) * 100_000_000 + \
+               ((d[3] >> 4) & 0xF) * 10_000_000 + \
+               (d[3] & 0xF) * 1_000_000 + \
+               ((d[2] >> 4) & 0xF) * 100_000 + \
+               (d[2] & 0xF) * 10_000 + \
+               ((d[1] >> 4) & 0xF) * 1_000 + \
+               (d[1] & 0xF) * 100 + \
+               ((d[0] >> 4) & 0xF) * 10 + \
+               (d[0] & 0xF)
     
     def get_frequency(self):
         """Read current frequency from X6100."""
-        resp = self._send_civ(self.CMD_FREQ_READ)
+        resp = self._send_civ(self.CMD_FREQ_READ, subcmd=0x03)
         if resp:
             logger.info(f"X6100 freq response: {resp.hex(' ')} ({len(resp)} bytes)")
-        if resp and len(resp) >= 10:
-            freq_hz = self._civ_bcd_to_freq(resp[5:10])
+        if resp and len(resp) >= 11:
+            # Response: FE FE FROM TO CMD(0x00) SUBCMD(0x03) [5 BCD] FD
+            freq_hz = self._civ_bcd_to_freq(resp[6:11])
             self.current_freq = freq_hz / 1_000_000
             logger.info(f"X6100 freq decoded: {self.current_freq} MHz")
             return self.current_freq
