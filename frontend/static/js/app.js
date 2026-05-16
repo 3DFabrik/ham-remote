@@ -23,8 +23,19 @@ class UVK5Remote {
         this.rxPeakHold = 0;
         this.txClipTimeout = null;
         this.rxClipTimeout = null;
+        this._txLoggedOnce = false;
         
         this.init();
+    }
+    
+    _log(msg) {
+        console.log('[HAM]', msg);
+        const el = document.getElementById('debug-log');
+        if (el) {
+            const time = new Date().toLocaleTimeString();
+            el.textContent += `[${time}] ${msg}\n`;
+            el.scrollTop = el.scrollHeight;
+        }
     }
     
     init() {
@@ -136,6 +147,11 @@ class UVK5Remote {
             const peak = this._getPeakFromData(this.txDataArray);
             const db = this._amplitudeToDb(peak);
             this._updateBar('tx', db, peak);
+            // Log first significant TX reading
+            if (db > -50 && !this._txLoggedOnce) {
+                this._log('[TX-METER] First reading: ' + db.toFixed(1) + ' dB, peak=' + peak.toFixed(3));
+                this._txLoggedOnce = true;
+            }
         }
         
         // Update RX level (from received audio analyser)
@@ -367,14 +383,14 @@ class UVK5Remote {
         if (this.pttActive) return;
         this.pttActive = true;
         this.els.pttButton.classList.add('active');
-        console.log('[PTT] PTT pressed – starting mic...');
+        this._log('[PTT] PTT pressed – starting mic...');
         
         this.socket.emit('audio_stop_rx');
         this.socket.emit('ptt_press');
         
         try {
             await this.startMicrophone();
-            console.log('[PTT] Mic started successfully');
+            this._log('[PTT] Mic started successfully');
         } catch (err) {
             console.error('[PTT] Mic start failed:', err);
             // Show error briefly on PTT button
@@ -394,6 +410,7 @@ class UVK5Remote {
     pttOff() {
         if (!this.pttActive) return;
         this.pttActive = false;
+        this._log('[PTT] PTT released – stopping mic');
         this.els.pttButton.classList.remove('active');
         
         this.socket.emit('ptt_release');
@@ -465,23 +482,23 @@ class UVK5Remote {
     
     async startMicrophone() {
         try {
-            console.log('[MIC] startMicrophone called');
+            this._log('[MIC] startMicrophone called');
             
             if (!this.audioContext) {
                 this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
                     sampleRate: 16000
                 });
-                console.log('[MIC] AudioContext created, state:', this.audioContext.state);
+                this._log('[MIC] AudioContext created, state: ' + this.audioContext.state);
             }
             
             // Resume AudioContext if suspended (browser autoplay policy)
             if (this.audioContext.state === 'suspended') {
-                console.log('[MIC] Resuming suspended AudioContext...');
+                this._log('[MIC] Resuming suspended AudioContext...');
                 await this.audioContext.resume();
-                console.log('[MIC] AudioContext state now:', this.audioContext.state);
+                this._log('[MIC] AudioContext state now: ' + this.audioContext.state);
             }
             
-            console.log('[MIC] Requesting getUserMedia...');
+            this._log('[MIC] Requesting getUserMedia...');
             // Open mic fresh on each PTT press
             this.micStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
@@ -492,7 +509,7 @@ class UVK5Remote {
                     sampleRate: 16000
                 }
             });
-            console.log('[MIC] Got mic stream:', this.micStream.getTracks().length, 'tracks');
+            this._log('[MIC] Got mic stream: ' + this.micStream.getTracks().length + ' tracks');
             
             // Set up TX analyser for level monitoring
             const micSource = this.audioContext.createMediaStreamSource(this.micStream);
@@ -528,7 +545,7 @@ class UVK5Remote {
             };
             
             this.mediaRecorder.start(20);
-            console.log('Microphone streaming started (Opus, 24kbit/s)');
+            this._log('[MIC] MediaRecorder started (Opus, 24kbit/s)');
             
         } catch (err) {
             console.error('[MIC] startMicrophone failed:', err);
