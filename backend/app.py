@@ -354,13 +354,14 @@ class YaesuCATRadio(UVK5Radio):
                 return None
     
     def set_frequency(self, freq_mhz):
-        """Set frequency using Yaesu BCD format."""
+        """Set frequency, immediately read back and push to frontend."""
         freq_hz = int(freq_mhz * 1_000_000)
         bcd = _freq_to_bcd(freq_hz)
         resp = self._send_cat(self.CMD_FREQ_SET, bcd)
         if resp:
-            self.current_freq = freq_mhz
-            logger.info(f"Yaesu freq set to {freq_mhz} MHz")
+            confirmed = self.get_frequency()
+            if confirmed:
+                socketio.emit('radio_update', self.get_status())
     
     def get_frequency(self):
         """Read current frequency from radio."""
@@ -555,16 +556,15 @@ class XieguX6100Radio(UVK5Radio):
             return False
     
     def set_frequency(self, freq_mhz):
-        """Set frequency using CI-V BCD format (5 bytes, 10Hz resolution)."""
+        """Set frequency, immediately read back and push to frontend."""
         freq_hz = int(freq_mhz * 1_000_000)
         bcd = self._freq_to_civ_bcd(freq_hz)
-        logger.info(f"X6100 set freq: {freq_mhz} MHz = {freq_hz} Hz, BCD: {bcd.hex(' ')}")
         resp = self._send_civ(self.CMD_FREQ_SET, data=bcd)
         if resp:
-            self.current_freq = freq_mhz
-            self._freq_set_at = time.time()  # suppress monitor reads for 3s
-        else:
-            logger.warning(f"X6100 set freq no response")
+            # Immediately read back confirmed frequency
+            confirmed = self.get_frequency()
+            if confirmed:
+                socketio.emit('radio_update', self.get_status())
     
     def _freq_to_civ_bcd(self, freq_hz):
         """Convert Hz to CI-V BCD (5 bytes, LSB first)."""
@@ -634,9 +634,7 @@ class XieguX6100Radio(UVK5Radio):
         while self._running:
             try:
                 if self.connected and not SIMULATE:
-                    # Skip freq read if we just set it (avoid overwriting UI)
-                    if time.time() - self._freq_set_at > 3.0:
-                        self.get_frequency()
+                    self.get_frequency()
                     
                     # Read S-meter
                     resp = self._send_civ(self.CMD_SMETER_READ, subcmd=0x02)
