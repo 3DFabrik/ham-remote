@@ -570,27 +570,27 @@ def api_audio_devices():
         result = subprocess.run(['aplay', '-l'], capture_output=True, text=True, timeout=5)
         if result.returncode == 0:
             for line in result.stdout.split('\n'):
-                if line.startswith('card'):
+                if line.startswith('card') or line.startswith('Karte'):
                     # Parse: card 0: NVidia [HDA NVidia], device 0: ALC889 Analog [ALC889 Analog]
-                    parts = line.split(':')
-                    if len(parts) >= 3:
-                        card_info = parts[0].strip()
-                        name = parts[1].strip()
-                        detail = parts[2].strip()
-                        # Extract card/device numbers
-                        import re
-                        match = re.search(r'card (\d+).*device (\d+)', card_info)
-                        if match:
-                            card_num = match.group(1)
-                            dev_num = match.group(2)
-                            hw_id = f"hw:{card_num},{dev_num}"
-                            devices['playback'].append({
-                                'id': hw_id,
-                                'name': name,
-                                'detail': detail,
-                                'card': int(card_num),
-                                'device': int(dev_num)
-                            })
+                    import re
+                    # Parse both English and German output formats
+                    # EN: card 0: CODEC [USB Audio CODEC], device 0: USB Audio [USB Audio]
+                    # DE: Karte 0: CODEC [USB Audio CODEC], Gerät 0: USB Audio [USB Audio]
+                    match = re.search(r'(?:card|Karte) (\d+).*?(?:device|Gerät) (\d+)', line)
+                    if match:
+                        card_num = match.group(1)
+                        dev_num = match.group(2)
+                        # Extract name between first pair of brackets
+                        name_match = re.search(r'\[([^\]]+)\]', line)
+                        name = name_match.group(1) if name_match else f"Card {card_num}"
+                        hw_id = f"hw:{card_num},{dev_num}"
+                        devices['playback'].append({
+                            'id': hw_id,
+                            'name': name,
+                            'detail': f"hw:{card_num},{dev_num}",
+                            'card': int(card_num),
+                            'device': int(dev_num)
+                        })
     except (subprocess.TimeoutExpired, FileNotFoundError):
         logger.warning("aplay not available")
 
@@ -599,24 +599,21 @@ def api_audio_devices():
         result = subprocess.run(['arecord', '-l'], capture_output=True, text=True, timeout=5)
         if result.returncode == 0:
             for line in result.stdout.split('\n'):
-                if line.startswith('card'):
-                    parts = line.split(':')
-                    if len(parts) >= 3:
-                        card_info = parts[0].strip()
-                        name = parts[1].strip()
-                        detail = parts[2].strip()
-                        import re
-                        match = re.search(r'card (\d+).*device (\d+)', card_info)
-                        if match:
-                            card_num = match.group(1)
-                            dev_num = match.group(2)
-                            hw_id = f"hw:{card_num},{dev_num}"
-                            devices['capture'].append({
-                                'id': hw_id,
-                                'name': name,
-                                'detail': detail,
-                                'card': int(card_num),
-                                'device': int(dev_num)
+                if line.startswith('card') or line.startswith('Karte'):
+                    import re
+                    match = re.search(r'(?:card|Karte) (\d+).*?(?:device|Gerät) (\d+)', line)
+                    if match:
+                        card_num = match.group(1)
+                        dev_num = match.group(2)
+                        name_match = re.search(r'\[([^\]]+)\]', line)
+                        name = name_match.group(1) if name_match else f"Card {card_num}"
+                        hw_id = f"hw:{card_num},{dev_num}"
+                        devices['capture'].append({
+                            'id': hw_id,
+                            'name': name,
+                            'detail': f"hw:{card_num},{dev_num}",
+                            'card': int(card_num),
+                            'device': int(dev_num)
                             })
     except (subprocess.TimeoutExpired, FileNotFoundError):
         logger.warning("arecord not available")
