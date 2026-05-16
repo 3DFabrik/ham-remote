@@ -465,7 +465,7 @@ class UVK5Remote {
             this._log('[PTT] ERROR: ' + err.name + ': ' + err.message);
         }
         
-        this.socket.emit('audio_stop_rx');
+        this.stopRxAudio();
         this.socket.emit('ptt_press');
     }
     
@@ -483,7 +483,7 @@ class UVK5Remote {
             this.mediaRecorder = null;
         }
         
-        this.socket.emit('audio_start_rx');
+        this.startRxAudio();
     }
     
     // ============================================================

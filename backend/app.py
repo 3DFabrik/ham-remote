@@ -556,21 +556,6 @@ class XieguX6100Radio(UVK5Radio):
     def set_frequency(self, freq_mhz):
         """Set frequency using CI-V BCD format (5 bytes, 10Hz resolution)."""
         freq_hz = int(freq_mhz * 1_000_000)
-        # CI-V frequency: 5 bytes BCD, LSB first
-        # Example: 14.250000 MHz = 14250000 Hz
-        # BCD: 00 50 42 01 00 (10Hz units, LSB first)
-        freq_10hz = freq_hz // 10
-        bcd = freq_10hz.to_bytes(5, 'little')  # Already packed BCD for CI-V
-        # Actually CI-V uses packed BCD nibbles, LSB first
-        bcd = b''
-        val = freq_10hz
-        for _ in range(5):
-            byte = ((val % 10) << 4) | ((val // 10) % 10)
-            bcd = bytes([byte]) + bcd  # prepend (LSB first in CI-V)
-            val = val // 100
-        # CI-V sends in reverse (LSB first)
-        bcd_rev = bcd[::-1]  # Reverse for CI-V wire format
-        # Actually simpler: just pack as BCD digits, 2 per byte, LSB first
         bcd = self._freq_to_civ_bcd(freq_hz)
         resp = self._send_civ(self.CMD_FREQ_SET, data=bcd)
         if resp:
@@ -581,18 +566,21 @@ class XieguX6100Radio(UVK5Radio):
         """Convert Hz to CI-V BCD (5 bytes, LSB first, 10Hz units)."""
         freq_10hz = freq_hz // 10
         digits = f"{freq_10hz:010d}"  # 10 digits for 5 bytes
-        # Pack pairs of digits into bytes, LSB first
-        result = b''
-        for i in range(0, 10, 2):
-            byte = (int(digits[9-i]) << 4) | int(digits[9-i-1])
-            result += bytes([byte])
-        return result
+        # Pack as BCD MSB-first, then reverse bytes for CI-V LSB-first
+        bcd_msb = b''
+        for i in range(5):
+            high = int(digits[2 * i])
+            low = int(digits[2 * i + 1])
+            bcd_msb += bytes([(high << 4) | low])
+        return bcd_msb[::-1]  # Reverse for CI-V wire order
     
     def _civ_bcd_to_freq(self, bcd_bytes):
         """Convert CI-V BCD (5 bytes, LSB first) to Hz."""
+        # Reverse to MSB-first, then decode BCD
+        msb = bcd_bytes[::-1]
         digits = ''
-        for b in bcd_bytes:
-            digits = f'{b & 0x0F}{(b >> 4) & 0x0F}' + digits
+        for b in msb:
+            digits += f'{(b >> 4) & 0x0F}{b & 0x0F}'
         return int(digits) * 10
     
     def get_frequency(self):
