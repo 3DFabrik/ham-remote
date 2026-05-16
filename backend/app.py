@@ -557,10 +557,13 @@ class XieguX6100Radio(UVK5Radio):
         """Set frequency using CI-V BCD format (5 bytes, 10Hz resolution)."""
         freq_hz = int(freq_mhz * 1_000_000)
         bcd = self._freq_to_civ_bcd(freq_hz)
+        logger.info(f"X6100 set freq: {freq_mhz} MHz = {freq_hz} Hz, BCD: {bcd.hex(' ')}")
         resp = self._send_civ(self.CMD_FREQ_SET, data=bcd)
         if resp:
+            logger.info(f"X6100 set freq response: {resp.hex(' ')}")
             self.current_freq = freq_mhz
-            logger.info(f"X6100 freq set to {freq_mhz} MHz")
+        else:
+            logger.warning(f"X6100 set freq no response")
     
     def _freq_to_civ_bcd(self, freq_hz):
         """Convert Hz to CI-V BCD (5 bytes, LSB first, 10Hz units)."""
@@ -586,10 +589,12 @@ class XieguX6100Radio(UVK5Radio):
     def get_frequency(self):
         """Read current frequency from X6100."""
         resp = self._send_civ(self.CMD_FREQ_READ)
+        if resp:
+            logger.info(f"X6100 freq response: {resp.hex(' ')} ({len(resp)} bytes)")
         if resp and len(resp) >= 10:
-            # Response: FE FE 00 A4 03 [5 bytes BCD freq] FD
             freq_hz = self._civ_bcd_to_freq(resp[5:10])
             self.current_freq = freq_hz / 1_000_000
+            logger.info(f"X6100 freq decoded: {self.current_freq} MHz")
             return self.current_freq
         return self.current_freq
     
