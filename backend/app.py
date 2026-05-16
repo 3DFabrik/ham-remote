@@ -482,6 +482,16 @@ def api_connect():
     return jsonify({'success': success, 'port': radio.port})
 
 
+@app.route('/api/simulate', methods=['POST'])
+def api_set_simulate():
+    """Toggle simulation mode."""
+    global SIMULATE
+    data = request.json or {}
+    SIMULATE = data.get('enabled', True)
+    logger.info(f"Simulation mode set to: {SIMULATE}")
+    return jsonify({'success': True, 'simulate': SIMULATE})
+
+
 @app.route('/api/disconnect', methods=['POST'])
 def api_disconnect():
     """Disconnect from the radio."""

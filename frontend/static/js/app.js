@@ -634,6 +634,16 @@ class UVK5Remote {
         
         this.els.radioTypeSelect.addEventListener('change', () => this.setRadioType());
         
+        // Simulation toggle
+        this.els.simulateToggle.addEventListener('change', () => {
+            const enabled = this.els.simulateToggle.checked;
+            fetch('/api/simulate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled })
+            }).catch(err => console.error('Set simulate error:', err));
+        });
+        
         // Tabs
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', () => {
