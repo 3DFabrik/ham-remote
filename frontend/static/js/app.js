@@ -352,21 +352,30 @@ class UVK5Remote {
     
     adjustDigit(index, delta) {
         const freqStr = this.frequency.toFixed(3);
-        const digits = freqStr.replace('.', '').split('').map(Number);
+        const parts = freqStr.split('.');
+        const intDigits = parts[0].padStart(3, '0').split('').map(Number);
+        const decDigits = parts[1].split('').map(Number);
+        const digits = [...intDigits, ...decDigits]; // 6 digits
         
         digits[index] = (digits[index] + delta + 10) % 10;
         
-        const newFreq = parseInt(digits.join('')) / 1000;
+        const intPart = parseInt(digits.slice(0, 3).join(''));
+        const decPart = digits.slice(3).join('');
+        const newFreq = parseFloat(`${intPart}.${decPart}`);
         
-        if (newFreq >= 0.1 && newFreq <= 500.0) {
+        if (newFreq >= 0.001 && newFreq <= 999.999) {
             this.setFrequency(newFreq);
         }
     }
     
     updateFrequencyDisplay() {
         const freqStr = this.frequency.toFixed(3);
-        const digits = freqStr.replace('.', '').split('');
-        digits.forEach((d, i) => {
+        // Extract digits, pad to 6 (XXX.XXX format)
+        const parts = freqStr.split('.');
+        const intDigits = parts[0].padStart(3, '0').split('');  // 3 digits before dot
+        const decDigits = parts[1].split('');                     // 3 digits after dot
+        const allDigits = [...intDigits, ...decDigits];           // 6 digits total
+        allDigits.forEach((d, i) => {
             const el = document.getElementById(`digit-${i}`);
             if (el) el.textContent = d;
         });
