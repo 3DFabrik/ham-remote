@@ -31,12 +31,6 @@ class UVK5Remote {
     
     _log(msg) {
         console.log('[HAM]', msg);
-        const el = document.getElementById('debug-log');
-        if (el) {
-            const time = new Date().toLocaleTimeString();
-            el.textContent += `[${time}] ${msg}\n`;
-            el.scrollTop = el.scrollHeight;
-        }
     }
     
     init() {
@@ -365,10 +359,8 @@ class UVK5Remote {
                     
                     this._micReady = true;
                     micBtn.textContent = '🎤 Mic ON';
-                    micBtn.style.borderColor = '#0f0';
-                    micBtn.style.color = '#0f0';
+                    micBtn.classList.add('active');
                     micStatus.textContent = this.micStream.getTracks()[0].label;
-                    micStatus.style.color = '#0f0';
                     this._log('[MIC] ready: ' + this.micStream.getTracks()[0].label);
                 } catch (err) {
                     micStatus.textContent = err.name + ': ' + err.message;

@@ -632,6 +632,41 @@ body {
     opacity: 0.6;
 }
 
+/* Mic Enable */
+.mic-enable-bar {
+    text-align: center;
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.btn-mic-toggle {
+    padding: 6px 16px;
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-dim);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-mic-toggle:hover {
+    border-color: var(--accent);
+}
+
+.btn-mic-toggle.active {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.mic-status {
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
 /* ============================================================
    Responsive
    ============================================================ */
