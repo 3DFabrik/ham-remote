@@ -335,38 +335,42 @@ class UVK5Remote {
     setupPTT() {
         const pttBtn = this.els.pttButton;
         
-        pttBtn.addEventListener('touchstart', (e) => {
+        // CRITICAL: Request getUserMedia IMMEDIATELY in the sync event handler
+        // so the browser sees it as a user gesture. Store the promise for
+        // startMicrophone() to await later.
+        const requestMic = () => {
+            this._pendingMicPromise = navigator.mediaDevices.getUserMedia({
+                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
+            }).catch(err => {
+                this._log('[MIC] getUserMedia failed: ' + err.name + ': ' + err.message);
+                return null;
+            });
+        };
+        
+        pttBtn.addEventListener('pointerdown', (e) => {
             e.preventDefault();
+            if (!this.pttActive) requestMic();
             this.pttOn();
         });
         
-        pttBtn.addEventListener('touchend', (e) => {
+        pttBtn.addEventListener('pointerup', (e) => {
             e.preventDefault();
             this.pttOff();
         });
         
-        pttBtn.addEventListener('touchcancel', (e) => {
-            e.preventDefault();
-            this.pttOff();
-        });
-        
-        pttBtn.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            this.pttOn();
-        });
-        
-        pttBtn.addEventListener('mouseup', (e) => {
-            e.preventDefault();
-            this.pttOff();
-        });
-        
-        pttBtn.addEventListener('mouseleave', () => {
+        pttBtn.addEventListener('pointerleave', () => {
             if (this.pttActive) this.pttOff();
+        });
+        
+        pttBtn.addEventListener('pointercancel', (e) => {
+            e.preventDefault();
+            this.pttOff();
         });
         
         document.addEventListener('keydown', (e) => {
             if (e.code === this.pttHotkey && !e.repeat) {
                 e.preventDefault();
+                if (!this.pttActive) requestMic();
                 this.pttOn();
             }
         });
@@ -498,17 +502,21 @@ class UVK5Remote {
                 this._log('[MIC] AudioContext state now: ' + this.audioContext.state);
             }
             
-            this._log('[MIC] Requesting getUserMedia...');
-            // Open mic fresh on each PTT press
-            this.micStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    channelCount: 1,
-                    sampleRate: 16000
+            // Use pre-requested mic stream from pointerdown (user gesture context)
+            if (this._pendingMicPromise) {
+                this._log('[MIC] Awaiting pre-requested mic stream...');
+                this.micStream = await this._pendingMicPromise;
+                this._pendingMicPromise = null;
+                if (!this.micStream) {
+                    throw new Error('getUserMedia returned null');
                 }
-            });
+            } else {
+                // Fallback: request mic directly (may fail without user gesture)
+                this._log('[MIC] No pre-requested stream, requesting getUserMedia...');
+                this.micStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
+                });
+            }
             this._log('[MIC] Got mic stream: ' + this.micStream.getTracks().length + ' tracks');
             
             // Set up TX analyser for level monitoring
