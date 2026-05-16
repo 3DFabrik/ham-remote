@@ -499,16 +499,34 @@ class XieguX6100Radio(UVK5Radio):
             try:
                 self.serial.reset_input_buffer()
                 self.serial.write(frame)
-                # Read response: FE FE FROM TO CMD [SUBCMD] [DATA] FD
-                # Max CI-V response is ~30 bytes, read with timeout
-                resp = self.serial.read(30)
+                # Read response: FE [FE] FROM TO CMD [SUBCMD] [DATA] FD
+                # X6100 sometimes sends 1 FE, sometimes 2
+                # Try multiple reads to get the full response
+                resp = b''
+                deadline = time.time() + 1.5
+                while time.time() < deadline:
+                    chunk = self.serial.read(30)
+                    if chunk:
+                        resp += chunk
+                        if b'\xFD' in resp:
+                            break
+                    else:
+                        break
                 if resp and b'\xFD' in resp:
-                    # Find the end marker
                     end = resp.index(b'\xFD')
                     resp = resp[:end + 1]
-                    # Validate: should start with FE FE
-                    if len(resp) >= 6 and resp[0] == 0xFE and resp[1] == 0xFE:
-                        return resp
+                    # Skip preamble FE bytes
+                    idx = 0
+                    while idx < len(resp) and resp[idx] == 0xFE:
+                        idx += 1
+                    if idx < len(resp):
+                        resp = resp[idx-1:]  # Keep one FE
+                        resp = b'\xFE\xFE' + resp[1:]  # Normalize to 2 FE
+                    if len(resp) >= 6 and resp[0] == 0xFE:
+                        # Verify response command matches
+                        resp_cmd = resp[4] if len(resp) > 4 else 0
+                        if resp_cmd == cmd or resp_cmd == 0xFB:
+                            return resp
                 return None
             except serial.SerialException as e:
                 logger.error(f"X6100 CI-V error: {e}")
@@ -632,11 +650,7 @@ class XieguX6100Radio(UVK5Radio):
         while self._running:
             try:
                 if self.connected and not SIMULATE:
-                    # Skip freq read right after a set (avoid stale echo)
-                    if time.time() - self._freq_set_at > 2.0:
-                        self.get_frequency()
-                    
-                    # Read S-meter
+                    # Read S-meter only (freq updated via set_frequency readback)
                     resp = self._send_civ(self.CMD_SMETER_READ, subcmd=0x02)
                     if resp and len(resp) >= 7:
                         raw = resp[5] if len(resp) > 5 else 0
@@ -645,7 +659,7 @@ class XieguX6100Radio(UVK5Radio):
                 elif self.connected and SIMULATE:
                     import random
                     self.smeter_value = random.choice([3, 4, 5, 5, 6, 6, 7])
-                eventlet.sleep(1.0)
+                eventlet.sleep(2.0)
             except Exception as e:
                 logger.error(f"X6100 monitor error: {e}")
                 eventlet.sleep(5.0)

@@ -310,7 +310,7 @@ class UVK5Remote {
     
     setFrequency(freq) {
         freq = Math.max(0.1, Math.min(500.0, freq));
-        freq = Math.round(freq * 10000) / 10000; // 10Hz resolution
+        freq = Math.round(freq * 1000) / 1000; // kHz resolution
         
         this.frequency = freq;
         this.updateFrequencyDisplay();
@@ -323,12 +323,12 @@ class UVK5Remote {
     }
     
     adjustDigit(index, delta) {
-        const freqStr = this.frequency.toFixed(4);
+        const freqStr = this.frequency.toFixed(3);
         const digits = freqStr.replace('.', '').split('').map(Number);
         
         digits[index] = (digits[index] + delta + 10) % 10;
         
-        const newFreq = parseInt(digits.join('')) / 10000; // 10Hz resolution
+        const newFreq = parseInt(digits.join('')) / 1000;
         
         if (newFreq >= 0.1 && newFreq <= 500.0) {
             this.setFrequency(newFreq);
@@ -336,7 +336,7 @@ class UVK5Remote {
     }
     
     updateFrequencyDisplay() {
-        const freqStr = this.frequency.toFixed(4);
+        const freqStr = this.frequency.toFixed(3);
         this.els.freqDisplay.textContent = freqStr;
         
         const digits = freqStr.replace('.', '').split('');
