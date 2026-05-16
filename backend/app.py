@@ -363,7 +363,7 @@ app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # No static file cache
 app.jinja_env.auto_reload = True
 app.jinja_env.cache_size = 0  # Disable Jinja template bytecode cache
 
-socketio = SocketIO(app, cors_allowed_origins='*', async_mode='eventlet')
+socketio = SocketIO(app, cors_allowed_origins='*', async_mode='eventlet', logger=True, engineio_logger=True)
 
 # Register all radio drivers
 register_radio('uvk5', 'Quansheng UV-K5', 'Via AIOC cable, 38400 baud', 38400, UVK5Radio)
@@ -654,6 +654,30 @@ def api_audio_config():
         'playback': audio_playback_dev,
         'capture': audio_capture_dev
     })
+
+
+@app.route('/api/audio/rx/start', methods=['POST'])
+def api_audio_rx_start():
+    """Start RX audio stream via REST (fallback if Socket.IO fails)."""
+    from flask import request as req
+    client_id = req.json.get('clientId', 'rest-client') if req.json else 'rest-client'
+    logger.info(f"REST RX start from {client_id}")
+    if audio_stream_manager:
+        audio_stream_manager.start_rx_stream(client_id)
+        return jsonify({'success': True, 'message': 'RX stream started'})
+    return jsonify({'success': False, 'message': 'No stream manager'}), 500
+
+
+@app.route('/api/audio/rx/stop', methods=['POST'])
+def api_audio_rx_stop():
+    """Stop RX audio stream via REST."""
+    from flask import request as req
+    client_id = req.json.get('clientId', 'rest-client') if req.json else 'rest-client'
+    logger.info(f"REST RX stop from {client_id}")
+    if audio_stream_manager:
+        audio_stream_manager.stop_rx_stream(client_id)
+        return jsonify({'success': True, 'message': 'RX stream stopped'})
+    return jsonify({'success': False}), 500
 
 
 # ============================================================

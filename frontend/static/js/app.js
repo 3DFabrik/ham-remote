@@ -56,9 +56,16 @@ class UVK5Remote {
             reconnectionAttempts: 10
         });
         
+        console.log('Socket.IO client version:', io.version || 'unknown');
+        console.log('Connecting to:', window.location.origin);
+        
         this.socket.on('connect', () => {
-            console.log('WebSocket connected');
+            console.log('WebSocket connected, id:', this.socket.id);
             this.updateConnectionStatus(true);
+        });
+        
+        this.socket.on('connect_error', (err) => {
+            console.error('Socket connect error:', err.message);
         });
         
         this.socket.on('disconnect', () => {
@@ -628,9 +635,14 @@ class UVK5Remote {
         const btnStartRx = document.getElementById('btn-start-rx');
         if (btnStartRx) {
             btnStartRx.addEventListener('click', () => {
-                console.log('Manually starting RX audio...');
-                this.socket.emit('audio_start_rx');
-                console.log('audio_start_rx emitted');
+                console.log('Manually starting RX audio via REST...');
+                fetch('/api/audio/rx/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ clientId: this.socket?.id || 'browser' })
+                }).then(r => r.json()).then(data => {
+                    console.log('RX start response:', data);
+                }).catch(err => console.error('RX start error:', err));
             });
         }
         
