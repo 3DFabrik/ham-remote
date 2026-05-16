@@ -451,7 +451,226 @@ class YaesuCATRadio(UVK5Radio):
             10: -63, 11: -53, 12: -43
         }
         return smeter_db.get(self.smeter_value, -127)
+
+
 # ============================================================
+# Xiegu X6100 - Icom CI-V compatible protocol
+# USB-C provides both CAT serial + sound card
+# ============================================================
+
+class XieguX6100Radio(UVK5Radio):
+    """Interface for Xiegu X6100 via CI-V protocol over USB serial."""
+    
+    BAUD_RATE = 19200
+    CI_V_ADDR = 0xA4  # X6100 default CI-V address
+    CONTROLLER_ADDR = 0x00  # Controller (us)
+    
+    # CI-V commands (Icom-compatible)
+    CMD_FREQ_SET = 0x05    # Set frequency
+    CMD_FREQ_READ = 0x03   # Read frequency
+    CMD_MODE_SET = 0x06    # Set mode
+    CMD_MODE_READ = 0x04   # Read mode
+    CMD_PTT_ON = 0x08     # PTT On (via 0x1C 0x00)
+    CMD_PTT_OFF = 0x88    # PTT Off (via 0x1C 0x00)
+    CMD_SMETER_READ = 0x15 # Read S-meter (subcmd 0x02)
+    CMD_ID_READ = 0x19    # Read radio ID
+    
+    # Mode codes
+    MODE_CODES = {
+        'LSB': 0x00, 'USB': 0x01, 'AM': 0x02, 'CW': 0x03,
+        'RTTY': 0x04, 'FM': 0x05, 'WFM': 0x06, 'NFM': 0x08,
+        'CW-R': 0x07, 'RTTY-R': 0x09
+    }
+    MODE_NAMES = {v: k for k, v in MODE_CODES.items()}
+    
+    def __init__(self, port=None):
+        super().__init__(port)
+        self.current_mode = 'SSB'
+    
+    def _build_civ(self, cmd, subcmd=None, data=b''):
+        """Build a CI-V frame: FE FE TO FROM CMD [SUBCMD] [DATA] FD"""
+        frame = bytes([0xFE, 0xFE, self.CI_V_ADDR, self.CONTROLLER_ADDR, cmd])
+        if subcmd is not None:
+            frame += bytes([subcmd])
+        frame += data + bytes([0xFD])
+        return frame
+    
+    def _send_civ(self, cmd, subcmd=None, data=b''):
+        """Send CI-V command and read response."""
+        if not self.serial or not self.serial.is_open:
+            return None
+        frame = self._build_civ(cmd, subcmd, data)
+        with self._lock:
+            try:
+                self.serial.reset_input_buffer()
+                self.serial.write(frame)
+                # Read response: FE FE FROM TO CMD [SUBCMD] [DATA] FD
+                # Max CI-V response is ~30 bytes, read with timeout
+                resp = self.serial.read(30)
+                if resp and b'\xFD' in resp:
+                    # Find the end marker
+                    end = resp.index(b'\xFD')
+                    resp = resp[:end + 1]
+                    # Validate: should start with FE FE
+                    if len(resp) >= 6 and resp[0] == 0xFE and resp[1] == 0xFE:
+                        return resp
+                return None
+            except serial.SerialException as e:
+                logger.error(f"X6100 CI-V error: {e}")
+                self.connected = False
+                return None
+    
+    def connect(self, port=None):
+        """Connect to X6100 via USB serial."""
+        if port:
+            self.port = port
+        if not self.port:
+            return False
+        try:
+            self.serial = serial.Serial(
+                port=self.port,
+                baudrate=self.BAUD_RATE,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                timeout=2
+            )
+            self.connected = True
+            logger.info(f"Connected to Xiegu X6100 on {self.port} at {self.BAUD_RATE} baud")
+            
+            # Verify radio ID
+            resp = self._send_civ(self.CMD_ID_READ)
+            if resp and len(resp) >= 7:
+                radio_id = resp[5] if len(resp) > 5 else 0
+                logger.info(f"X6100 radio ID: 0x{radio_id:02X}")
+            
+            self._running = True
+            self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+            self._monitor_thread.start()
+            return True
+        except serial.SerialException as e:
+            logger.error(f"Failed to connect to X6100: {e}")
+            self.connected = False
+            return False
+    
+    def set_frequency(self, freq_mhz):
+        """Set frequency using CI-V BCD format (5 bytes, 10Hz resolution)."""
+        freq_hz = int(freq_mhz * 1_000_000)
+        # CI-V frequency: 5 bytes BCD, LSB first
+        # Example: 14.250000 MHz = 14250000 Hz
+        # BCD: 00 50 42 01 00 (10Hz units, LSB first)
+        freq_10hz = freq_hz // 10
+        bcd = freq_10hz.to_bytes(5, 'little')  # Already packed BCD for CI-V
+        # Actually CI-V uses packed BCD nibbles, LSB first
+        bcd = b''
+        val = freq_10hz
+        for _ in range(5):
+            byte = ((val % 10) << 4) | ((val // 10) % 10)
+            bcd = bytes([byte]) + bcd  # prepend (LSB first in CI-V)
+            val = val // 100
+        # CI-V sends in reverse (LSB first)
+        bcd_rev = bcd[::-1]  # Reverse for CI-V wire format
+        # Actually simpler: just pack as BCD digits, 2 per byte, LSB first
+        bcd = self._freq_to_civ_bcd(freq_hz)
+        resp = self._send_civ(self.CMD_FREQ_SET, data=bcd)
+        if resp:
+            self.current_freq = freq_mhz
+            logger.info(f"X6100 freq set to {freq_mhz} MHz")
+    
+    def _freq_to_civ_bcd(self, freq_hz):
+        """Convert Hz to CI-V BCD (5 bytes, LSB first, 10Hz units)."""
+        freq_10hz = freq_hz // 10
+        digits = f"{freq_10hz:010d}"  # 10 digits for 5 bytes
+        # Pack pairs of digits into bytes, LSB first
+        result = b''
+        for i in range(0, 10, 2):
+            byte = (int(digits[9-i]) << 4) | int(digits[9-i-1])
+            result += bytes([byte])
+        return result
+    
+    def _civ_bcd_to_freq(self, bcd_bytes):
+        """Convert CI-V BCD (5 bytes, LSB first) to Hz."""
+        digits = ''
+        for b in bcd_bytes:
+            digits = f'{b & 0x0F}{(b >> 4) & 0x0F}' + digits
+        return int(digits) * 10
+    
+    def get_frequency(self):
+        """Read current frequency from X6100."""
+        resp = self._send_civ(self.CMD_FREQ_READ)
+        if resp and len(resp) >= 10:
+            # Response: FE FE 00 A4 03 [5 bytes BCD freq] FD
+            freq_hz = self._civ_bcd_to_freq(resp[5:10])
+            self.current_freq = freq_hz / 1_000_000
+            return self.current_freq
+        return self.current_freq
+    
+    def set_mode(self, mode):
+        """Set operating mode."""
+        mode_code = self.MODE_CODES.get(mode, 0x05)  # default FM
+        resp = self._send_civ(self.CMD_MODE_SET, data=bytes([mode_code]))
+        if resp:
+            self.current_mode = mode
+    
+    def set_ptt(self, active):
+        """PTT via CI-V (uses 0x1C 0x00 command)."""
+        if active:
+            self._send_civ(0x1C, subcmd=0x00, data=bytes([0x01]))  # TX
+        else:
+            self._send_civ(0x1C, subcmd=0x00, data=bytes([0x02]))  # RX
+        self.ptt_active = active
+    
+    def get_status(self):
+        """Get full radio status."""
+        return {
+            'connected': self.connected,
+            'frequency': self.current_freq,
+            'mode': self.current_mode,
+            'ptt': self.ptt_active,
+            'smeter': self.smeter_value,
+            'rssi': self._smeter_to_rssi(),
+            'volume': self.volume,
+            'squelch': self.squelch,
+            'tx_power': self.tx_power,
+            'timestamp': datetime.now().isoformat()
+        }
+    
+    def _monitor_loop(self):
+        """Background thread polling X6100 status."""
+        while self._running:
+            try:
+                if self.connected and not SIMULATE:
+                    self.get_frequency()
+                    
+                    # Read S-meter
+                    resp = self._send_civ(self.CMD_SMETER_READ, subcmd=0x02)
+                    if resp and len(resp) >= 7:
+                        raw = resp[5] if len(resp) > 5 else 0
+                        self.smeter_value = self._raw_to_smeter(raw)
+                elif self.connected and SIMULATE:
+                    import random
+                    self.smeter_value = random.choice([3, 4, 5, 5, 6, 6, 7])
+                eventlet.sleep(1.0)
+            except Exception as e:
+                logger.error(f"X6100 monitor error: {e}")
+                eventlet.sleep(5.0)
+    
+    def _raw_to_smeter(self, raw):
+        """Convert raw S-meter to S0-S9+60."""
+        if raw < 10: return 0
+        elif raw < 30: return 1 + int((raw - 10) / 4)
+        elif raw < 120: return 3 + int((raw - 30) / 15)
+        elif raw < 200: return 9
+        else: return min(12, 10 + int((raw - 200) / 27))
+    
+    def _smeter_to_rssi(self):
+        """Convert S-meter to dBm."""
+        db = {0:-127, 1:-121, 2:-115, 3:-109, 4:-103,
+              5:-97, 6:-91, 7:-85, 8:-79, 9:-73, 10:-63, 11:-53, 12:-43}
+        return db.get(self.smeter_value, -127)
+
+
+register_radio('xiegu-x6100', 'Xiegu X6100', 'CI-V protocol, USB-C (CAT+Audio), 19200 baud', 19200, XieguX6100Radio)
 
 app = Flask(__name__, 
             static_folder='../frontend/static',
