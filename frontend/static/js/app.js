@@ -92,7 +92,6 @@ class UVK5Remote {
         this.els = {
             freqDisplay: document.getElementById('freq-display'),
             freqLabel: document.getElementById('freq-label'),
-            freqDigits: document.getElementById('freq-digits'),
             statusDot: document.getElementById('status-indicator'),
             statusText: document.getElementById('status-text'),
             pttButton: document.getElementById('ptt-button'),
@@ -252,7 +251,10 @@ class UVK5Remote {
     // ============================================================
     
     setupFrequencyDigits() {
-        const digitsContainer = this.els.freqDigits;
+        const upContainer = document.getElementById('freq-digits-up');
+        const downContainer = document.getElementById('freq-digits-down');
+        if (!upContainer || !downContainer) return;
+        
         const positions = [
             { type: 'digit', index: 0 },
             { type: 'digit', index: 1 },
@@ -263,39 +265,32 @@ class UVK5Remote {
             { type: 'digit', index: 5 },
         ];
         
-        digitsContainer.innerHTML = '';
+        upContainer.innerHTML = '';
+        downContainer.innerHTML = '';
         
-        positions.forEach((pos, i) => {
+        positions.forEach((pos) => {
             if (pos.type === 'separator') {
-                const sep = document.createElement('div');
-                sep.className = 'freq-digit separator';
-                sep.textContent = '.';
-                digitsContainer.appendChild(sep);
+                const sepUp = document.createElement('div');
+                sepUp.className = 'freq-digit-btn spacer';
+                upContainer.appendChild(sepUp);
+                const sepDown = document.createElement('div');
+                sepDown.className = 'freq-digit-btn spacer';
+                downContainer.appendChild(sepDown);
                 return;
             }
             
-            const digitEl = document.createElement('div');
-            digitEl.className = 'freq-digit';
-            digitEl.dataset.index = pos.index;
-            
             const upBtn = document.createElement('button');
-            upBtn.className = 'digit-up';
+            upBtn.className = 'freq-digit-btn';
             upBtn.textContent = '▲';
             upBtn.addEventListener('click', () => this.adjustDigit(pos.index, 1));
             
-            const val = document.createElement('div');
-            val.className = 'digit-value';
-            val.id = `digit-${pos.index}`;
-            
             const downBtn = document.createElement('button');
-            downBtn.className = 'digit-down';
+            downBtn.className = 'freq-digit-btn';
             downBtn.textContent = '▼';
             downBtn.addEventListener('click', () => this.adjustDigit(pos.index, -1));
             
-            digitEl.appendChild(upBtn);
-            digitEl.appendChild(val);
-            digitEl.appendChild(downBtn);
-            digitsContainer.appendChild(digitEl);
+            upContainer.appendChild(upBtn);
+            downContainer.appendChild(downBtn);
         });
         
         this.updateFrequencyDisplay();
@@ -338,12 +333,6 @@ class UVK5Remote {
     updateFrequencyDisplay() {
         const freqStr = this.frequency.toFixed(3);
         this.els.freqDisplay.textContent = freqStr;
-        
-        const digits = freqStr.replace('.', '').split('');
-        digits.forEach((d, i) => {
-            const el = document.getElementById(`digit-${i}`);
-            if (el) el.textContent = d;
-        });
     }
     
     // ============================================================

@@ -301,24 +301,15 @@ body {
     margin-bottom: 12px;
 }
 
-.freq-digits {
+.freq-digit-row {
     display: flex;
     justify-content: center;
-    gap: 3px;
-    margin-bottom: 12px;
+    gap: 4px;
 }
 
-.freq-digit {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1px;
-}
-
-.freq-digit .digit-up,
-.freq-digit .digit-down {
-    width: 32px;
-    height: 24px;
+.freq-digit-btn {
+    width: 34px;
+    height: 28px;
     border: 1px solid var(--border);
     background: var(--bg-dark);
     color: var(--text-dim);
@@ -330,29 +321,15 @@ body {
     justify-content: center;
 }
 
-.freq-digit .digit-up:active,
-.freq-digit .digit-down:active {
+.freq-digit-btn:active {
     background: var(--accent-dim);
     color: var(--text-bright);
 }
 
-.freq-digit .digit-value {
-    font-family: 'SF Mono', monospace;
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--text-bright);
-    width: 32px;
-    text-align: center;
-    line-height: 1.2;
-}
-
-.freq-digit.separator {
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--text-dim);
-    display: flex;
-    align-items: center;
-    padding: 0 1px;
+.freq-digit-btn.spacer {
+    visibility: hidden;
+    border: none;
+    background: none;
 }
 
 .quick-freqs {
