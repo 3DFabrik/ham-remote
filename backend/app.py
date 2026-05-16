@@ -875,6 +875,7 @@ def ws_audio_stop_tx():
 @socketio.on('audio_start_rx')
 def ws_audio_start_rx():
     """Browser wants to receive audio stream."""
+    logger.info(f"audio_start_rx received from {request.sid}")
     if audio_stream_manager:
         audio_stream_manager.start_rx_stream(request.sid)
 
@@ -882,6 +883,7 @@ def ws_audio_start_rx():
 @socketio.on('audio_stop_rx')
 def ws_audio_stop_rx():
     """Browser stops receiving audio."""
+    logger.info(f"audio_stop_rx received from {request.sid}")
     if audio_stream_manager:
         audio_stream_manager.stop_rx_stream(request.sid)
 

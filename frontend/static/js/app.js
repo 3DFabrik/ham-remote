@@ -50,7 +50,7 @@ class UVK5Remote {
     connectWebSocket() {
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         this.socket = io({
-            transports: ['websocket'],
+            transports: ['websocket', 'polling'],
             reconnection: true,
             reconnectionDelay: 1000,
             reconnectionAttempts: 10
@@ -623,6 +623,16 @@ class UVK5Remote {
         this.els.btnRefreshPorts.addEventListener('click', () => this.refreshPorts());
         this.els.btnConnect.addEventListener('click', () => this.connectRadio());
         this.els.btnDisconnect.addEventListener('click', () => this.disconnectRadio());
+        
+        // Manual RX audio start
+        const btnStartRx = document.getElementById('btn-start-rx');
+        if (btnStartRx) {
+            btnStartRx.addEventListener('click', () => {
+                console.log('Manually starting RX audio...');
+                this.socket.emit('audio_start_rx');
+                console.log('audio_start_rx emitted');
+            });
+        }
         
         this.els.audioPlayback = document.getElementById('audio-playback');
         this.els.audioCapture = document.getElementById('audio-capture');
