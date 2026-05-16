@@ -97,127 +97,115 @@ body {
 }
 
 /* ============================================================
-   LEVEL BARS (upward-growing, always visible)
+   LEVEL BARS (horizontal, always visible)
    ============================================================ */
 
 .level-section {
     background: var(--bg-card);
     border-radius: var(--radius);
-    padding: 12px 14px 10px;
-}
-
-.level-bar-container {
-    display: flex;
-    gap: 14px;
-    align-items: stretch;
-}
-
-.level-bar-wrapper {
-    flex: 1;
+    padding: 10px 14px;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 4px;
+    gap: 6px;
 }
 
-/* The vertical bar track */
-.level-bar-track {
-    width: 100%;
-    height: 100px;
+.level-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.level-name {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    min-width: 22px;
+    text-align: center;
+}
+
+/* Horizontal bar track */
+.level-bar-track-h {
+    flex: 1;
+    height: 14px;
     background: var(--bg-dark);
-    border-radius: 6px;
+    border-radius: 4px;
     border: 1px solid var(--border);
     position: relative;
     overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end; /* bars grow from bottom */
 }
 
-/* Fill inside the bar */
-.level-bar-fill {
-    width: 100%;
-    height: 0%;
-    border-radius: 4px;
-    transition: height 0.1s ease-out;
+/* Fill inside the horizontal bar */
+.level-bar-fill-h {
+    height: 100%;
+    width: 0%;
+    border-radius: 3px;
+    transition: width 0.1s ease-out;
     position: relative;
 }
 
-/* Color profiles per channel */
-.smeter-fill {
-    background: linear-gradient(to top, #00d4aa 0%, #00d4aa 55%, #ffaa00 75%, #ff4444 100%);
+/* Color profiles per channel (horizontal gradient left→right) */
+.smeter-fill-h {
+    background: linear-gradient(to right, #00d4aa 0%, #00d4aa 55%, #ffaa00 75%, #ff4444 100%);
 }
 
-.rx-fill {
-    background: linear-gradient(to top, #00d4aa 0%, #00d4aa 60%, #ffaa00 80%, #ff4444 100%);
+.rx-fill-h {
+    background: linear-gradient(to right, #00d4aa 0%, #00d4aa 60%, #ffaa00 80%, #ff4444 100%);
 }
 
-.tx-fill {
-    background: linear-gradient(to top, #3399ff 0%, #3399ff 60%, #ffaa00 80%, #ff4444 100%);
+.tx-fill-h {
+    background: linear-gradient(to right, #3399ff 0%, #3399ff 60%, #ffaa00 80%, #ff4444 100%);
 }
 
-/* Clip indicator (red dot in top-right of bar) */
-.level-bar-clip-indicator {
+/* Clip indicator (red dot at right end) */
+.level-bar-clip-h {
     position: absolute;
+    right: 3px;
     top: 3px;
-    right: 4px;
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: transparent;
     transition: background 0.15s;
     z-index: 2;
 }
 
-.level-bar-clip-indicator.clipping {
+.level-bar-clip-h.clipping {
     background: var(--danger);
     box-shadow: 0 0 6px var(--danger-glow);
 }
 
-/* dB scale marks on the track */
-.level-bar-track::before {
+/* Scale marks on horizontal track */
+.level-bar-track-h::before {
     content: '';
     position: absolute;
-    left: 0;
-    right: 0;
-    top: 12%;
-    height: 1px;
+    top: 0;
+    bottom: 0;
+    left: 56%;
+    width: 1px;
     background: rgba(255,255,255,0.15);
     z-index: 1;
 }
 
-.level-bar-track::after {
+.level-bar-track-h::after {
     content: '';
     position: absolute;
-    left: 0;
-    right: 0;
-    top: 40%;
-    height: 1px;
+    top: 0;
+    bottom: 0;
+    left: 82%;
+    width: 1px;
     background: rgba(255,255,255,0.10);
     z-index: 1;
 }
 
-/* Label under each bar */
-.level-bar-label {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    width: 100%;
-    padding: 0 2px;
-}
-
-.level-bar-name {
-    font-size: 11px;
-    font-weight: 700;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
-
+/* Value label */
 .level-bar-value {
     font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
     font-size: 10px;
     color: var(--text-dim);
+    min-width: 50px;
+    text-align: right;
 }
 
 .level-bar-value.clip-warn {
@@ -650,7 +638,6 @@ body {
 
 @media (max-height: 700px) {
     .freq-mhz { font-size: 36px; }
-    .level-bar-track { height: 70px; }
     .btn-ptt { width: 120px; height: 120px; }
     .btn-ptt .ptt-label { font-size: 26px; }
 }
@@ -658,5 +645,4 @@ body {
 @media (min-width: 768px) {
     #app { padding: 20px; }
     .freq-mhz { font-size: 48px; }
-    .level-bar-track { height: 110px; }
 }

@@ -117,15 +117,49 @@ class UVK5Remote {
     // ============================================================
     
     setupLevelMeters() {
-        // RX analyser will be created when AudioContext is ready
-        // TX analyser is created when microphone starts
         this.rxAnalyser = null;
         this.txAnalyser = null;
         this.rxDataArray = null;
         this.txDataArray = null;
+        this._monitorMicLevel = null;
+        
+        // Start monitoring mic level immediately (for TX bar)
+        this._startAlwaysOnMicMonitor();
         
         // Start the level meter animation loop
         this._levelMeterLoop();
+    }
+    
+    async _startAlwaysOnMicMonitor() {
+        // Open mic at low level just for metering, not for streaming
+        try {
+            if (!this.audioContext) {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: 16000
+                });
+            }
+            
+            this._monitorMicStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    channelCount: 1
+                }
+            });
+            
+            const micSource = this.audioContext.createMediaStreamSource(this._monitorMicStream);
+            this.txAnalyser = this.audioContext.createAnalyser();
+            this.txAnalyser.fftSize = 256;
+            this.txAnalyser.smoothingTimeConstant = 0.5;
+            this.txDataArray = new Uint8Array(this.txAnalyser.frequencyBinCount);
+            micSource.connect(this.txAnalyser);
+            // Don't connect to destination – just for metering
+            
+            console.log('Always-on mic monitor started (TX level meter)');
+        } catch (err) {
+            console.warn('Mic monitor not available:', err.message);
+        }
     }
     
     _levelMeterLoop() {
@@ -169,9 +203,9 @@ class UVK5Remote {
         
         if (!fillEl) return;
         
-        // Map dB to percentage: -60dB = 0%, 0dB = 100%
+        // Map dB to percentage: -60dB = 0%, 0dB = 100% (horizontal width)
         const pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
-        fillEl.style.height = pct + '%';
+        fillEl.style.width = pct + '%';
         
         // Display text
         if (db === -Infinity) {
@@ -452,24 +486,30 @@ class UVK5Remote {
                 });
             }
             
-            this.micStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    channelCount: 1,
-                    sampleRate: 16000
+            // If we already have a monitor mic stream, reuse it for streaming
+            // Otherwise open a new one
+            if (this._monitorMicStream) {
+                this.micStream = this._monitorMicStream;
+            } else {
+                this.micStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                        channelCount: 1,
+                        sampleRate: 16000
+                    }
+                });
+                // Also set up TX analyser if not already running
+                if (!this.txAnalyser) {
+                    const micSource = this.audioContext.createMediaStreamSource(this.micStream);
+                    this.txAnalyser = this.audioContext.createAnalyser();
+                    this.txAnalyser.fftSize = 256;
+                    this.txAnalyser.smoothingTimeConstant = 0.5;
+                    this.txDataArray = new Uint8Array(this.txAnalyser.frequencyBinCount);
+                    micSource.connect(this.txAnalyser);
                 }
-            });
-            
-            // Create TX analyser for level monitoring
-            const micSource = this.audioContext.createMediaStreamSource(this.micStream);
-            this.txAnalyser = this.audioContext.createAnalyser();
-            this.txAnalyser.fftSize = 256;
-            this.txAnalyser.smoothingTimeConstant = 0.5;
-            this.txDataArray = new Uint8Array(this.txAnalyser.frequencyBinCount);
-            micSource.connect(this.txAnalyser);
-            // Don't connect analyser to destination
+            }
             
             // Use MediaRecorder with Opus codec
             const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -505,25 +545,14 @@ class UVK5Remote {
     }
     
     stopMicrophone() {
+        // Only stop the MediaRecorder, keep the mic stream + analyser alive for metering
         if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
             this.mediaRecorder.stop();
             this.mediaRecorder = null;
         }
-        if (this.micStream) {
-            this.micStream.getTracks().forEach(t => t.stop());
-            this.micStream = null;
-        }
-        // Clear TX analyser
-        this.txAnalyser = null;
-        this.txDataArray = null;
-        
-        // Reset TX bar
-        if (this.els.txBarFill) this.els.txBarFill.style.height = '0%';
-        if (this.els.txDb) {
-            this.els.txDb.textContent = '-∞ dB';
-            this.els.txDb.className = 'level-bar-value';
-        }
-        if (this.els.txClip) this.els.txClip.classList.remove('clipping');
+        // Do NOT stop micStream – the always-on monitor keeps it
+        // Do NOT clear txAnalyser/txDataArray – keep meter running
+        // Do NOT reset TX bar
     }
     
     processRxAudio(data) {
@@ -750,7 +779,7 @@ class UVK5Remote {
         // value: 0-9 = S0-S9, 10-12 = +20/+40/+60
         // Map to percentage: S0=0%, S9=56%, +60=100%
         const pct = Math.min(100, (value / 12) * 100);
-        this.els.smeterFill.style.height = pct + '%';
+        this.els.smeterFill.style.width = pct + '%';
         
         let text;
         if (value === 0) {
