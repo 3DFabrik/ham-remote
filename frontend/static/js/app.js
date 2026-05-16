@@ -411,14 +411,6 @@ class UVK5Remote {
             if (e.code === this.pttHotkey) { e.preventDefault(); this.pttOff(); }
         });
     }
-        });
-        document.addEventListener('keyup', (e) => {
-            if (e.code === this.pttHotkey) {
-                e.preventDefault();
-                this.pttOff();
-            }
-        });
-    }
     
     pttOn() {
         if (this.pttActive) return;
@@ -456,8 +448,6 @@ class UVK5Remote {
         } catch (err) {
             this._log('[PTT] recorder error: ' + err.message);
         }
-    }
-        });
     }
     
     pttOff() {
@@ -655,7 +645,7 @@ class UVK5Remote {
         this.rxPlaying = false;
         
         this._initOpusDecoder();
-        
+    }
     
     async _initOpusDecoder() {
         try {
