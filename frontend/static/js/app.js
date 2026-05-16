@@ -651,11 +651,12 @@ class UVK5Remote {
         }
         this._rxBufSamples += float32Array.length;
         
-        // Cap buffer at 1 second to prevent drift
-        if (this._rxBufSamples > 16000) {
-            const excess = this._rxBufSamples - 16000;
-            this._rxReadPos = (this._rxReadPos + excess) % this._rxRingBuf.length;
-            this._rxBufSamples = 16000;
+        // Gradual drift correction: if buffer > 0.5s, consume slightly faster
+        // This avoids the hard skip that causes the 7-second dropout
+        if (this._rxBufSamples > 8000) {
+            // Skip just 1 sample per frame to gradually catch up
+            this._rxReadPos = (this._rxReadPos + 1) % this._rxRingBuf.length;
+            this._rxBufSamples -= 1;
         }
     }
     
