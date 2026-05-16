@@ -304,11 +304,12 @@ body {
 .freq-digit-row {
     display: flex;
     justify-content: center;
-    gap: 4px;
+    align-items: center;
+    gap: 3px;
 }
 
 .freq-digit-btn {
-    width: 34px;
+    width: 36px;
     height: 28px;
     border: 1px solid var(--border);
     background: var(--bg-dark);
@@ -326,10 +327,39 @@ body {
     color: var(--text-bright);
 }
 
-.freq-digit-btn.spacer {
+.freq-digit-cell {
+    width: 36px;
+    text-align: center;
+}
+
+.freq-digit-cell.value {
+    font-family: 'SF Mono', 'Consolas', monospace;
+    font-size: 32px;
+    font-weight: 700;
+    color: #00ff88;
+    line-height: 1.2;
+    text-shadow: 0 0 10px rgba(0, 255, 136, 0.4);
+}
+
+.freq-digit-cell.dot {
+    font-family: 'SF Mono', 'Consolas', monospace;
+    font-size: 32px;
+    font-weight: 700;
+    color: #00ff88;
+    line-height: 1.2;
+}
+
+.freq-digit-cell.spacer {
     visibility: hidden;
-    border: none;
-    background: none;
+}
+
+.freq-unit-label {
+    font-family: 'SF Mono', 'Consolas', monospace;
+    font-size: 14px;
+    color: var(--text-dim);
+    margin-left: 4px;
+    align-self: flex-end;
+    padding-bottom: 4px;
 }
 
 .quick-freqs {

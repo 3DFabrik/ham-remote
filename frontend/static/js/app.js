@@ -252,8 +252,9 @@ class UVK5Remote {
     
     setupFrequencyDigits() {
         const upContainer = document.getElementById('freq-digits-up');
+        const valContainer = document.getElementById('freq-digit-values');
         const downContainer = document.getElementById('freq-digits-down');
-        if (!upContainer || !downContainer) return;
+        if (!upContainer || !valContainer || !downContainer) return;
         
         const positions = [
             { type: 'digit', index: 0 },
@@ -263,33 +264,65 @@ class UVK5Remote {
             { type: 'digit', index: 3 },
             { type: 'digit', index: 4 },
             { type: 'digit', index: 5 },
+            { type: 'unit' },  // MHz label
         ];
         
         upContainer.innerHTML = '';
+        valContainer.innerHTML = '';
         downContainer.innerHTML = '';
         
         positions.forEach((pos) => {
             if (pos.type === 'separator') {
                 const sepUp = document.createElement('div');
-                sepUp.className = 'freq-digit-btn spacer';
+                sepUp.className = 'freq-digit-cell spacer';
                 upContainer.appendChild(sepUp);
+                
+                const sepVal = document.createElement('div');
+                sepVal.className = 'freq-digit-cell dot';
+                sepVal.textContent = '.';
+                valContainer.appendChild(sepVal);
+                
                 const sepDown = document.createElement('div');
-                sepDown.className = 'freq-digit-btn spacer';
+                sepDown.className = 'freq-digit-cell spacer';
                 downContainer.appendChild(sepDown);
                 return;
             }
             
+            if (pos.type === 'unit') {
+                const u1 = document.createElement('div');
+                u1.className = 'freq-digit-cell spacer';
+                upContainer.appendChild(u1);
+                
+                const uVal = document.createElement('div');
+                uVal.className = 'freq-unit-label';
+                uVal.textContent = 'MHz';
+                valContainer.appendChild(uVal);
+                
+                const u3 = document.createElement('div');
+                u3.className = 'freq-digit-cell spacer';
+                downContainer.appendChild(u3);
+                return;
+            }
+            
+            // UP button
             const upBtn = document.createElement('button');
             upBtn.className = 'freq-digit-btn';
             upBtn.textContent = '▲';
             upBtn.addEventListener('click', () => this.adjustDigit(pos.index, 1));
+            upContainer.appendChild(upBtn);
             
+            // Value
+            const val = document.createElement('div');
+            val.className = 'freq-digit-cell value';
+            val.id = `digit-${pos.index}`;
+            val.textContent = '0';
+            valContainer.appendChild(val);
+            
+            // DOWN button
             const downBtn = document.createElement('button');
             downBtn.className = 'freq-digit-btn';
             downBtn.textContent = '▼';
             downBtn.addEventListener('click', () => this.adjustDigit(pos.index, -1));
-            
-            upContainer.appendChild(upBtn);
             downContainer.appendChild(downBtn);
         });
         
@@ -332,7 +365,11 @@ class UVK5Remote {
     
     updateFrequencyDisplay() {
         const freqStr = this.frequency.toFixed(3);
-        this.els.freqDisplay.textContent = freqStr;
+        const digits = freqStr.replace('.', '').split('');
+        digits.forEach((d, i) => {
+            const el = document.getElementById(`digit-${i}`);
+            if (el) el.textContent = d;
+        });
     }
     
     // ============================================================
