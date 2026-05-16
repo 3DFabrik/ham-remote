@@ -486,6 +486,7 @@ class XieguX6100Radio(UVK5Radio):
     def __init__(self, port=None):
         super().__init__(port)
         self.current_mode = 'SSB'
+        self._freq_set_at = 0  # timestamp of last freq set
     
     def _build_civ(self, cmd, subcmd=None, data=b''):
         """Build a CI-V frame: FE FE TO FROM CMD [SUBCMD] [DATA] FD"""
@@ -560,8 +561,8 @@ class XieguX6100Radio(UVK5Radio):
         logger.info(f"X6100 set freq: {freq_mhz} MHz = {freq_hz} Hz, BCD: {bcd.hex(' ')}")
         resp = self._send_civ(self.CMD_FREQ_SET, data=bcd)
         if resp:
-            logger.info(f"X6100 set freq response: {resp.hex(' ')}")
             self.current_freq = freq_mhz
+            self._freq_set_at = time.time()  # suppress monitor reads for 3s
         else:
             logger.warning(f"X6100 set freq no response")
     
@@ -633,7 +634,9 @@ class XieguX6100Radio(UVK5Radio):
         while self._running:
             try:
                 if self.connected and not SIMULATE:
-                    self.get_frequency()
+                    # Skip freq read if we just set it (avoid overwriting UI)
+                    if time.time() - self._freq_set_at > 3.0:
+                        self.get_frequency()
                     
                     # Read S-meter
                     resp = self._send_civ(self.CMD_SMETER_READ, subcmd=0x02)
