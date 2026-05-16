@@ -24,6 +24,7 @@ class UVK5Remote {
         this.txClipTimeout = null;
         this.rxClipTimeout = null;
         this._txLoggedOnce = false;
+        this._micReady = false;
         
         this.init();
     }
@@ -335,6 +336,49 @@ class UVK5Remote {
     setupPTT() {
         const pttBtn = this.els.pttButton;
         
+        // Mic must be activated via click first (browser requires it in click context)
+        const micBtn = document.getElementById('btn-mic-enable');
+        const micStatus = document.getElementById('mic-enable-status');
+        
+        if (micBtn) {
+            micBtn.addEventListener('click', async () => {
+                try {
+                    micStatus.textContent = 'Activating...';
+                    micStatus.style.color = '#ffaa00';
+                    
+                    if (!this.audioContext) {
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                    }
+                    if (this.audioContext.state === 'suspended') await this.audioContext.resume();
+                    
+                    this.micStream = await navigator.mediaDevices.getUserMedia({
+                        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
+                    });
+                    
+                    // TX analyser
+                    const micSource = this.audioContext.createMediaStreamSource(this.micStream);
+                    this.txAnalyser = this.audioContext.createAnalyser();
+                    this.txAnalyser.fftSize = 256;
+                    this.txAnalyser.smoothingTimeConstant = 0.5;
+                    this.txDataArray = new Uint8Array(this.txAnalyser.frequencyBinCount);
+                    micSource.connect(this.txAnalyser);
+                    
+                    this._micReady = true;
+                    micBtn.textContent = '🎤 Mic ON';
+                    micBtn.style.borderColor = '#0f0';
+                    micBtn.style.color = '#0f0';
+                    micStatus.textContent = this.micStream.getTracks()[0].label;
+                    micStatus.style.color = '#0f0';
+                    this._log('[MIC] ready: ' + this.micStream.getTracks()[0].label);
+                } catch (err) {
+                    micStatus.textContent = err.name + ': ' + err.message;
+                    micStatus.style.color = '#f44';
+                    this._log('[MIC] FAILED: ' + err.message);
+                }
+            });
+        }
+        
+        // PTT - only works after mic is enabled
         pttBtn.addEventListener('mousedown', (e) => {
             e.preventDefault();
             this.pttOn();
@@ -361,10 +405,12 @@ class UVK5Remote {
         });
         
         document.addEventListener('keydown', (e) => {
-            if (e.code === this.pttHotkey && !e.repeat) {
-                e.preventDefault();
-                this.pttOn();
-            }
+            if (e.code === this.pttHotkey && !e.repeat) { e.preventDefault(); this.pttOn(); }
+        });
+        document.addEventListener('keyup', (e) => {
+            if (e.code === this.pttHotkey) { e.preventDefault(); this.pttOff(); }
+        });
+    }
         });
         document.addEventListener('keyup', (e) => {
             if (e.code === this.pttHotkey) {
@@ -376,35 +422,58 @@ class UVK5Remote {
     
     pttOn() {
         if (this.pttActive) return;
+        if (!this._micReady) {
+            this._log('[PTT] Mic not enabled - click mic button first!');
+            return;
+        }
         this.pttActive = true;
         this.els.pttButton.classList.add('active');
-        this._log('[PTT] pressed');
+        this._log('[PTT] TX on');
         
         this.socket.emit('audio_stop_rx');
         this.socket.emit('ptt_press');
         
-        // Start mic directly - getUserMedia works in mousedown/touchstart context
-        this.startMicrophone().then(() => {
-            this._log('[PTT] mic OK');
-        }).catch(err => {
-            this._log('[PTT] ERROR: ' + err.name + ': ' + err.message);
-            const hint = this.els.pttButton.querySelector('.ptt-hint');
-            if (hint) {
-                hint.textContent = 'Error: ' + err.message;
-                hint.style.color = '#f44';
-                setTimeout(() => { hint.textContent = 'Hold to talk'; hint.style.color = ''; }, 3000);
-            }
+        // Start recording from already-open mic stream
+        try {
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                ? 'audio/webm;codecs=opus' : 'audio/ogg;codecs=opus';
+            this.mediaRecorder = new MediaRecorder(this.micStream, { mimeType, audioBitsPerSecond: 24000 });
+            this.mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0 && this.pttActive) {
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        this.socket.emit('audio_rx', {
+                            data: reader.result.split(',')[1],
+                            codec: 'opus-webm',
+                            sampleRate: 16000
+                        });
+                    };
+                    reader.readAsDataURL(e.data);
+                }
+            };
+            this.mediaRecorder.start(20);
+            this._log('[PTT] recording');
+        } catch (err) {
+            this._log('[PTT] recorder error: ' + err.message);
+        }
+    }
         });
     }
     
     pttOff() {
         if (!this.pttActive) return;
         this.pttActive = false;
-        this._log('[PTT] released');
+        this._log('[PTT] TX off');
         this.els.pttButton.classList.remove('active');
         
         this.socket.emit('ptt_release');
-        this.stopMicrophone();
+        
+        // Stop recorder but keep mic stream open
+        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+            this.mediaRecorder.stop();
+            this.mediaRecorder = null;
+        }
+        
         this.socket.emit('audio_start_rx');
     }
     
@@ -469,83 +538,6 @@ class UVK5Remote {
     // ============================================================
     // Audio (Microphone TX + Speaker RX with Level Analysis)
     // ============================================================
-    
-    async startMicrophone() {
-        this._log('[MIC] startMicrophone called');
-        
-        try {
-            if (!this.audioContext) {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                this._log('[MIC] AudioContext: ' + this.audioContext.state);
-            }
-            
-            if (this.audioContext.state === 'suspended') {
-                await this.audioContext.resume();
-                this._log('[MIC] resumed: ' + this.audioContext.state);
-            }
-            
-            this._log('[MIC] getUserMedia...');
-            this.micStream = await navigator.mediaDevices.getUserMedia({
-                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
-            });
-            this._log('[MIC] stream OK: ' + this.micStream.getTracks()[0].label);
-            
-            const micSource = this.audioContext.createMediaStreamSource(this.micStream);
-            this.txAnalyser = this.audioContext.createAnalyser();
-            this.txAnalyser.fftSize = 256;
-            this.txAnalyser.smoothingTimeConstant = 0.5;
-            this.txDataArray = new Uint8Array(this.txAnalyser.frequencyBinCount);
-            micSource.connect(this.txAnalyser);
-            this._log('[MIC] analyser connected');
-            
-            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-                ? 'audio/webm;codecs=opus' : 'audio/ogg;codecs=opus';
-            
-            this.mediaRecorder = new MediaRecorder(this.micStream, { mimeType, audioBitsPerSecond: 24000 });
-            this.mediaRecorder.ondataavailable = (e) => {
-                if (e.data.size > 0 && this.pttActive) {
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                        this.socket.emit('audio_rx', {
-                            data: reader.result.split(',')[1],
-                            codec: 'opus-webm',
-                            sampleRate: 16000
-                        });
-                    };
-                    reader.readAsDataURL(e.data);
-                }
-            };
-            this.mediaRecorder.start(20);
-            this._log('[MIC] recorder started: ' + mimeType);
-        } catch (err) {
-            this._log('[MIC] FAILED: ' + err.name + ': ' + err.message);
-            throw err;
-        }
-    }
-    
-    stopMicrophone() {
-        // Stop MediaRecorder
-        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-            this.mediaRecorder.stop();
-            this.mediaRecorder = null;
-        }
-        // Stop mic stream completely
-        if (this.micStream) {
-            this.micStream.getTracks().forEach(t => t.stop());
-            this.micStream = null;
-        }
-        // Clear TX analyser
-        this.txAnalyser = null;
-        this.txDataArray = null;
-        
-        // Reset TX bar
-        if (this.els.txBarFill) this.els.txBarFill.style.width = '0%';
-        if (this.els.txDb) {
-            this.els.txDb.textContent = '-∞ dB';
-            this.els.txDb.className = 'level-bar-value';
-        }
-        if (this.els.txClip) this.els.txClip.classList.remove('clipping');
-    }
     
     processRxAudio(data) {
         if (!this.audioContext) {
@@ -664,64 +656,6 @@ class UVK5Remote {
         
         this._initOpusDecoder();
         
-        // DEBUG: Mic test button
-        const micTestBtn = document.getElementById('btn-mic-test');
-        const micTestResult = document.getElementById('mic-test-result');
-        if (micTestBtn) {
-            micTestBtn.addEventListener('click', async () => {
-                micTestResult.textContent = 'Testing...';
-                micTestResult.style.color = '#ffaa00';
-                try {
-                    console.log('[MIC-TEST] isSecureContext:', window.isSecureContext);
-                    console.log('[MIC-TEST] mediaDevices:', !!navigator.mediaDevices);
-                    console.log('[MIC-TEST] getUserMedia:', !!navigator.mediaDevices?.getUserMedia);
-                    
-                    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                        micTestResult.textContent = 'FAIL: getUserMedia not available';
-                        micTestResult.style.color = '#f44';
-                        return;
-                    }
-                    
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    console.log('[MIC-TEST] Got stream:', stream.getTracks().length, 'tracks');
-                    stream.getTracks().forEach(t => {
-                        console.log('[MIC-TEST] Track:', t.label, t.readyState, t.kind);
-                    });
-                    
-                    // Also test AudioContext
-                    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-                    const source = ctx.createMediaStreamSource(stream);
-                    const analyser = ctx.createAnalyser();
-                    analyser.fftSize = 256;
-                    source.connect(analyser);
-                    const data = new Uint8Array(analyser.frequencyBinCount);
-                    
-                    // Read a few samples
-                    let maxLevel = 0;
-                    for (let i = 0; i < 10; i++) {
-                        await new Promise(r => setTimeout(r, 100));
-                        analyser.getByteTimeDomainData(data);
-                        for (let j = 0; j < data.length; j++) {
-                            const v = Math.abs(data[j] - 128) / 128;
-                            if (v > maxLevel) maxLevel = v;
-                        }
-                    }
-                    
-                    const db = maxLevel > 0 ? (20 * Math.log10(maxLevel)).toFixed(1) : '-∞';
-                    micTestResult.textContent = `OK! ${stream.getTracks()[0].label} | Peak: ${db} dB | Sprech mal rein!`;
-                    micTestResult.style.color = '#0f0';
-                    
-                    // Clean up test
-                    stream.getTracks().forEach(t => t.stop());
-                    ctx.close();
-                } catch (err) {
-                    console.error('[MIC-TEST] Error:', err);
-                    micTestResult.textContent = `ERROR: ${err.name}: ${err.message}`;
-                    micTestResult.style.color = '#f44';
-                }
-            });
-        }
-    }
     
     async _initOpusDecoder() {
         try {

@@ -111,18 +111,16 @@
                 </div>
             </section>
 
-            <!-- PTT Button -->
+            <!-- Mic Enable + PTT -->
             <section class="ptt-section">
                 <button class="btn-ptt" id="ptt-button">
                     <span class="ptt-label">PTT</span>
                     <span class="ptt-hint">Hold to talk</span>
                 </button>
-            </section>
-
-            <!-- DEBUG: Mic Test -->
-            <section style="text-align:center; padding: 8px;">
-                <button id="btn-mic-test" style="padding:10px 20px; background:#333; color:#0f0; border:1px solid #0f0; border-radius:8px; cursor:pointer; font-size:13px;">🎤 Mic Test</button>
-                <span id="mic-test-result" style="color:#888; font-size:12px; margin-left:8px;"></span>
+                <div style="margin-top:10px; text-align:center;">
+                    <button id="btn-mic-enable" style="padding:8px 16px; background:#1a1a1a; color:#888; border:1px solid #333; border-radius:8px; cursor:pointer; font-size:13px;">🎤 Enable Mic</button>
+                    <span id="mic-enable-status" style="color:#666; font-size:11px; margin-left:8px;"></span>
+                </div>
             </section>
 
             <!-- DEBUG: On-screen log -->
