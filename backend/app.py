@@ -811,13 +811,12 @@ class AudioStreamManager:
                     while self._running and self._capture_process.poll() is None:
                         chunk = self._capture_process.stdout.read(self.FRAME_BYTES)
                         if len(chunk) == self.FRAME_BYTES:
-                            # Encode PCM → Opus
-                            opus_frame = self.opus_encoder.encode(chunk, self.FRAME_SIZE)
-                            encoded = base64.b64encode(opus_frame).decode()
+                            # Send as raw PCM (base64 encoded) for maximum compatibility
+                            encoded = base64.b64encode(chunk).decode()
                             for sid in list(self.rx_clients):
                                 socketio.emit('audio_tx', {
                                     'data': encoded,
-                                    'codec': 'opus',
+                                    'codec': 'pcm',
                                     'sampleRate': self.SAMPLE_RATE
                                 }, room=sid)
                     
