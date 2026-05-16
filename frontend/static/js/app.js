@@ -175,44 +175,33 @@ class UVK5Remote {
     }
     
     _updateBar(channel, db, linearPeak) {
-        const fillEl = this.els[channel + 'BarFill'];
+        const maskEl = this.els[channel + 'BarFill'];  // now .level-bar-mask
         const dbEl = this.els[channel + 'Db'];
         const clipEl = this.els[channel + 'Clip'];
         const peakEl = document.getElementById(channel + '-peak');
+        const trackEl = document.getElementById(channel === 'smeter' ? 'rf-track' : channel + '-track');
         
-        if (!fillEl) return;
+        if (!maskEl) return;
         
         // Map dB to percentage: -60dB = 0%, 0dB = 100%
         const pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
         
-        // Determine if this channel is actively transmitting
-        const isTX = channel === 'tx';
-        const isActive = isTX ? this.pttActive : true; // RX/RF always active
+        // Mask covers (100 - pct)% from the right → reveals the LED gradient
+        maskEl.style.width = (100 - pct) + '%';
         
-        // Set width
-        fillEl.style.width = pct + '%';
-        
-        // Set color based on level (only when active)
-        const colorClasses = ['active-green', 'active-yellow', 'active-orange', 'active-red'];
-        fillEl.classList.remove('inactive', ...colorClasses);
-        
-        if (!isActive || pct < 1) {
-            fillEl.classList.add('inactive');
-        } else if (pct < 50) {
-            fillEl.classList.add('active-green');
-        } else if (pct < 75) {
-            fillEl.classList.add('active-yellow');
-        } else if (pct < 90) {
-            fillEl.classList.add('active-orange');
-        } else {
-            fillEl.classList.add('active-red');
+        // TX track: grey when mic on but not transmitting
+        if (channel === 'tx' && trackEl) {
+            if (this.pttActive) {
+                trackEl.classList.remove('tx-idle');
+            } else {
+                trackEl.classList.add('tx-idle');
+            }
         }
         
-        // Peak-hold: track max and decay slowly
+        // Peak-hold
         const peakKey = channel + 'PeakHold';
         const peakTimeKey = channel + 'PeakTime';
         const now = Date.now();
-        
         if (!this[peakKey]) this[peakKey] = 0;
         if (!this[peakTimeKey]) this[peakTimeKey] = 0;
         
@@ -220,8 +209,7 @@ class UVK5Remote {
             this[peakKey] = pct;
             this[peakTimeKey] = now;
         } else if (now - this[peakTimeKey] > 1000) {
-            // Decay peak after 1 second
-            this[peakKey] = Math.max(pct, this[peakKey] - 0.5);
+            this[peakKey] = Math.max(pct, this[peakKey] - 0.3);
         }
         
         if (peakEl) {
@@ -242,9 +230,8 @@ class UVK5Remote {
             dbEl.className = 'level-bar-value';
         }
         
-        // Clipping detection
-        const isClipping = linearPeak > 0.89;
-        if (isClipping) {
+        // Clipping
+        if (linearPeak > 0.89) {
             clipEl.classList.add('clipping');
             dbEl.classList.add('clip-warn');
             dbEl.textContent = 'CLIP!';
@@ -783,9 +770,9 @@ class UVK5Remote {
     
     updateSMeter(value) {
         // value: 0-9 = S0-S9, 10-12 = +20/+40/+60
-        // Map to percentage: S0=0%, S9=56%, +60=100%
         const pct = Math.min(100, (value / 12) * 100);
-        this.els.smeterFill.style.width = pct + '%';
+        // Mask: cover (100-pct)% from the right
+        this.els.smeterFill.style.width = (100 - pct) + '%';
         
         let text;
         if (value === 0) {

@@ -1,7 +1,6 @@
 /* ============================================================
    HAM Remote - Stylesheet
-   Mobile-first, dark theme, designed for touch operation
-   Level bars grow upward, frequency display is compact
+   Mobile-first, dark theme, LED-strip level meters
    ============================================================ */
 
 :root {
@@ -97,7 +96,13 @@ body {
 }
 
 /* ============================================================
-   LEVEL BARS (horizontal, always visible)
+   LEVEL BARS – LED strip style (horizontal, always visible)
+   
+   How it works:
+   - .level-bar-track = the LED strip (has the color gradient)
+   - .level-bar-mask = dark overlay covering the unfilled part from the RIGHT
+   - Signal goes UP → mask gets narrower → more LEDs visible
+   - TX when idle = grey gradient instead of colored
    ============================================================ */
 
 .level-section {
@@ -125,38 +130,47 @@ body {
     text-align: center;
 }
 
-/* Horizontal bar track */
-.level-bar-track-h {
+/* The track IS the LED strip */
+.level-bar-track {
     flex: 1;
     height: 14px;
-    background: var(--bg-dark);
     border-radius: 4px;
     border: 1px solid var(--border);
     position: relative;
     overflow: hidden;
+    /* LED colors: green → orange → red */
+    background: linear-gradient(to right,
+        #00cc88 0%,
+        #00cc88 50%,
+        #ccaa00 65%,
+        #ff7700 80%,
+        #ff2200 100%
+    );
 }
 
-/* Fill inside the horizontal bar – color set dynamically via JS */
-.level-bar-fill-h {
+/* TX track when mic is on but NOT transmitting: grey LEDs */
+.level-bar-track.tx-idle {
+    background: linear-gradient(to right,
+        #3a3a3a 0%,
+        #444 50%,
+        #555 70%,
+        #666 85%,
+        #777 100%
+    );
+}
+
+/* Dark mask – covers the unfilled portion from the right */
+.level-bar-mask {
+    position: absolute;
+    top: 0;
+    right: 0;
     height: 100%;
-    width: 0%;
-    border-radius: 3px;
-    transition: width 0.08s linear;
-    position: relative;
+    width: 100%;  /* 100% = fully masked = no signal */
+    background: #111;
+    z-index: 1;
 }
 
-/* Inactive state (mic on but not transmitting) */
-.level-bar-fill-h.inactive {
-    background: #444;
-}
-
-/* Active states – color based on level, set by JS */
-.level-bar-fill-h.active-green { background: #00d4aa; }
-.level-bar-fill-h.active-yellow { background: #ddcc00; }
-.level-bar-fill-h.active-orange { background: #ff8800; }
-.level-bar-fill-h.active-red { background: #ff3333; }
-
-/* Peak-hold marker (thin vertical line that falls back slowly) */
+/* Peak-hold marker (white line) */
 .level-bar-peak {
     position: absolute;
     top: 0;
@@ -166,13 +180,12 @@ body {
     border-radius: 1px;
     left: 0%;
     opacity: 0;
-    transition: left 0.1s linear, opacity 0.5s ease 1s;
     z-index: 2;
-    box-shadow: 0 0 3px rgba(255,255,255,0.5);
+    box-shadow: 0 0 4px rgba(255,255,255,0.6);
 }
 
-/* Clip indicator (red dot at right end) */
-.level-bar-clip-h {
+/* Clip indicator */
+.level-bar-clip {
     position: absolute;
     right: 3px;
     top: 3px;
@@ -180,39 +193,15 @@ body {
     height: 7px;
     border-radius: 50%;
     background: transparent;
-    transition: background 0.15s;
-    z-index: 2;
+    z-index: 3;
 }
 
-.level-bar-clip-h.clipping {
+.level-bar-clip.clipping {
     background: var(--danger);
     box-shadow: 0 0 6px var(--danger-glow);
 }
 
-/* Scale marks on horizontal track */
-.level-bar-track-h::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 56%;
-    width: 1px;
-    background: rgba(255,255,255,0.15);
-    z-index: 1;
-}
-
-.level-bar-track-h::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 82%;
-    width: 1px;
-    background: rgba(255,255,255,0.10);
-    z-index: 1;
-}
-
-/* Value label */
+/* dB value */
 .level-bar-value {
     font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
     font-size: 10px;
@@ -259,7 +248,6 @@ body {
     color: var(--text-primary);
 }
 
-/* Tab content */
 .tab-content {
     display: none;
 }
@@ -313,7 +301,6 @@ body {
     margin-bottom: 12px;
 }
 
-/* Frequency digit controls */
 .freq-digits {
     display: flex;
     justify-content: center;
@@ -368,7 +355,6 @@ body {
     padding: 0 1px;
 }
 
-/* Quick frequency buttons */
 .quick-freqs {
     display: flex;
     justify-content: center;
@@ -483,9 +469,10 @@ body {
 .ptt-section {
     flex: 1;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 16px 0;
+    padding: 16px 0 8px;
 }
 
 .btn-ptt {
@@ -602,7 +589,6 @@ body {
     cursor: pointer;
 }
 
-/* Hotkey button */
 .btn-hotkey {
     padding: 8px 20px;
     background: var(--bg-dark);
@@ -631,18 +617,6 @@ body {
     font-size: 11px;
     color: var(--text-dim);
     margin-left: 8px;
-}
-
-/* Footer */
-.footer {
-    text-align: center;
-    padding: 12px 0 8px;
-}
-
-.footer-text {
-    font-size: 12px;
-    color: var(--text-dim);
-    opacity: 0.6;
 }
 
 /* Mic Enable */
@@ -678,6 +652,18 @@ body {
 .mic-status {
     font-size: 11px;
     color: var(--text-dim);
+}
+
+/* Footer */
+.footer {
+    text-align: center;
+    padding: 12px 0 8px;
+}
+
+.footer-text {
+    font-size: 12px;
+    color: var(--text-dim);
+    opacity: 0.6;
 }
 
 /* ============================================================
