@@ -121,22 +121,40 @@ class UVK5Remote {
         this.txAnalyser = null;
         this.rxDataArray = null;
         this.txDataArray = null;
-        this._monitorMicLevel = null;
+        this._micMonitorActive = false;
+        this._micMonitorRequested = false;
         
-        // Start monitoring mic level immediately (for TX bar)
-        this._startAlwaysOnMicMonitor();
+        // We need a user gesture to access the microphone.
+        // Try on first click/touch anywhere on the page.
+        const activateOnGesture = () => {
+            if (!this._micMonitorActive && !this._micMonitorRequested) {
+                this._micMonitorRequested = true;
+                this._startAlwaysOnMicMonitor();
+            }
+        };
+        
+        document.addEventListener('click', activateOnGesture, { once: false });
+        document.addEventListener('touchstart', activateOnGesture, { once: false });
+        
+        // Also try when PTT is pressed (guaranteed gesture)
+        // (handled in pttOn)
         
         // Start the level meter animation loop
         this._levelMeterLoop();
     }
     
     async _startAlwaysOnMicMonitor() {
-        // Open mic at low level just for metering, not for streaming
+        // Open mic for level metering (not streaming)
         try {
             if (!this.audioContext) {
                 this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
                     sampleRate: 16000
                 });
+            }
+            
+            // Resume AudioContext if suspended (browser autoplay policy)
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
             }
             
             this._monitorMicStream = await navigator.mediaDevices.getUserMedia({
@@ -156,9 +174,11 @@ class UVK5Remote {
             micSource.connect(this.txAnalyser);
             // Don't connect to destination – just for metering
             
+            this._micMonitorActive = true;
             console.log('Always-on mic monitor started (TX level meter)');
         } catch (err) {
             console.warn('Mic monitor not available:', err.message);
+            this._micMonitorRequested = false; // Allow retry
         }
     }
     
