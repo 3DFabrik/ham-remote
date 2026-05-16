@@ -213,29 +213,6 @@ body {
     font-weight: 700;
 }
 
-/* Mic activate button */
-.btn-mic-activate {
-    background: var(--bg-dark);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text);
-    font-size: 14px;
-    padding: 2px 8px;
-    cursor: pointer;
-    line-height: 1;
-}
-
-.btn-mic-activate:hover {
-    border-color: var(--accent);
-}
-
-.level-status {
-    font-size: 10px;
-    color: var(--text-dim);
-    text-align: center;
-    padding-top: 2px;
-}
-
 /* ============================================================
    Tabs
    ============================================================ */

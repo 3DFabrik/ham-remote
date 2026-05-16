@@ -121,124 +121,12 @@ class UVK5Remote {
         this.txAnalyser = null;
         this.rxDataArray = null;
         this.txDataArray = null;
-        this._micMonitorActive = false;
-        this._micMonitorRequested = false;
         
-        this.micStatusEl = document.getElementById('mic-status');
-        this.micBtnEl = document.getElementById('btn-mic-activate');
-        
-        // Check if we can access the mic at all
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            this._showMicStatus('⚠️ Mikrofon nicht verfügbar (HTTPS nötig)', true);
-            this._showMicButton();
-            this._levelMeterLoop();
-            return;
-        }
-        
-        if (!window.isSecureContext) {
-            this._showMicStatus('⚠️ Sichere Verbindung nötig (HTTPS oder localhost)', true);
-            this._showMicButton();
-            this._levelMeterLoop();
-            return;
-        }
-        
-        // We need a user gesture to access the microphone.
-        // Try on first click/touch anywhere on the page.
-        const activateOnGesture = () => {
-            if (!this._micMonitorActive && !this._micMonitorRequested) {
-                this._micMonitorRequested = true;
-                this._showMicStatus('🎤 Mikrofon wird aktiviert...');
-                this._startAlwaysOnMicMonitor();
-            }
-        };
-        
-        document.addEventListener('click', activateOnGesture, { once: false });
-        document.addEventListener('touchstart', activateOnGesture, { once: false });
-        
-        // Also try when PTT is pressed (guaranteed gesture)
-        // (handled in pttOn)
-        
-        // Show hint that mic needs activation
-        this._showMicStatus('Klicke irgendwo um Mikrofon zu aktivieren');
-        this._showMicButton();
+        // Mic is only activated on PTT press (user gesture)
+        // TX level bar shows activity only while transmitting
         
         // Start the level meter animation loop
         this._levelMeterLoop();
-    }
-    
-    _showMicStatus(msg, isError) {
-        if (this.micStatusEl) {
-            this.micStatusEl.textContent = msg;
-            this.micStatusEl.style.display = 'block';
-            if (isError) this.micStatusEl.style.color = 'var(--danger)';
-        }
-    }
-    
-    _hideMicStatus() {
-        if (this.micStatusEl) this.micStatusEl.style.display = 'none';
-        if (this.micBtnEl) this.micBtnEl.style.display = 'none';
-    }
-    
-    _showMicButton() {
-        if (this.micBtnEl) {
-            this.micBtnEl.style.display = 'inline-block';
-            this.micBtnEl.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (!this._micMonitorActive) {
-                    this._micMonitorRequested = true;
-                    this._showMicStatus('🎤 Mikrofon wird aktiviert...');
-                    this._startAlwaysOnMicMonitor();
-                }
-            });
-        }
-    }
-    
-    async _startAlwaysOnMicMonitor() {
-        // Open mic for level metering (not streaming)
-        try {
-            if (!this.audioContext) {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                    sampleRate: 16000
-                });
-            }
-            
-            // Resume AudioContext if suspended (browser autoplay policy)
-            if (this.audioContext.state === 'suspended') {
-                await this.audioContext.resume();
-            }
-            
-            this._monitorMicStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    channelCount: 1
-                }
-            });
-            
-            const micSource = this.audioContext.createMediaStreamSource(this._monitorMicStream);
-            this.txAnalyser = this.audioContext.createAnalyser();
-            this.txAnalyser.fftSize = 256;
-            this.txAnalyser.smoothingTimeConstant = 0.5;
-            this.txDataArray = new Uint8Array(this.txAnalyser.frequencyBinCount);
-            micSource.connect(this.txAnalyser);
-            // Don't connect to destination – just for metering
-            
-            this._micMonitorActive = true;
-            this._hideMicStatus();
-            console.log('Always-on mic monitor started (TX level meter)');
-        } catch (err) {
-            console.warn('Mic monitor not available:', err.message);
-            this._micMonitorRequested = false; // Allow retry
-            if (err.name === 'NotAllowedError') {
-                this._showMicStatus('⚠️ Mikrofon-Zugriff verweigert. Browser-Einstellungen prüfen.', true);
-            } else if (err.name === 'NotFoundError') {
-                this._showMicStatus('⚠️ Kein Mikrofon gefunden.', true);
-            } else {
-                this._showMicStatus('⚠️ Mikrofon-Fehler: ' + err.message, true);
-            }
-            this._showMicButton();
-        }
     }
     
     _levelMeterLoop() {
@@ -565,30 +453,29 @@ class UVK5Remote {
                 });
             }
             
-            // If we already have a monitor mic stream, reuse it for streaming
-            // Otherwise open a new one
-            if (this._monitorMicStream) {
-                this.micStream = this._monitorMicStream;
-            } else {
-                this.micStream = await navigator.mediaDevices.getUserMedia({
-                    audio: {
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                        autoGainControl: true,
-                        channelCount: 1,
-                        sampleRate: 16000
-                    }
-                });
-                // Also set up TX analyser if not already running
-                if (!this.txAnalyser) {
-                    const micSource = this.audioContext.createMediaStreamSource(this.micStream);
-                    this.txAnalyser = this.audioContext.createAnalyser();
-                    this.txAnalyser.fftSize = 256;
-                    this.txAnalyser.smoothingTimeConstant = 0.5;
-                    this.txDataArray = new Uint8Array(this.txAnalyser.frequencyBinCount);
-                    micSource.connect(this.txAnalyser);
-                }
+            // Resume AudioContext if suspended (browser autoplay policy)
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
             }
+            
+            // Open mic fresh on each PTT press
+            this.micStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    channelCount: 1,
+                    sampleRate: 16000
+                }
+            });
+            
+            // Set up TX analyser for level monitoring
+            const micSource = this.audioContext.createMediaStreamSource(this.micStream);
+            this.txAnalyser = this.audioContext.createAnalyser();
+            this.txAnalyser.fftSize = 256;
+            this.txAnalyser.smoothingTimeConstant = 0.5;
+            this.txDataArray = new Uint8Array(this.txAnalyser.frequencyBinCount);
+            micSource.connect(this.txAnalyser);
             
             // Use MediaRecorder with Opus codec
             const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -624,14 +511,27 @@ class UVK5Remote {
     }
     
     stopMicrophone() {
-        // Only stop the MediaRecorder, keep the mic stream + analyser alive for metering
+        // Stop MediaRecorder
         if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
             this.mediaRecorder.stop();
             this.mediaRecorder = null;
         }
-        // Do NOT stop micStream – the always-on monitor keeps it
-        // Do NOT clear txAnalyser/txDataArray – keep meter running
-        // Do NOT reset TX bar
+        // Stop mic stream completely
+        if (this.micStream) {
+            this.micStream.getTracks().forEach(t => t.stop());
+            this.micStream = null;
+        }
+        // Clear TX analyser
+        this.txAnalyser = null;
+        this.txDataArray = null;
+        
+        // Reset TX bar
+        if (this.els.txBarFill) this.els.txBarFill.style.width = '0%';
+        if (this.els.txDb) {
+            this.els.txDb.textContent = '-∞ dB';
+            this.els.txDb.className = 'level-bar-value';
+        }
+        if (this.els.txClip) this.els.txClip.classList.remove('clipping');
     }
     
     processRxAudio(data) {
