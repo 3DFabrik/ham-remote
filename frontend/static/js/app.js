@@ -596,33 +596,11 @@ class UVK5Remote {
     _playAndAnalyzeRx(float32Array) {
         if (!this.audioContext) return;
         
-        // Queue-based playback to avoid gaps between frames
-        if (!this._rxQueue) {
-            this._rxQueue = [];
-            this._rxPlaying = false;
-            this._rxBufferTime = 0; // track scheduled time
-        }
-        
-        // Add frame to queue
-        this._rxQueue.push(float32Array);
-        
-        // Keep queue manageable (max ~200ms buffered)
-        if (this._rxQueue.length > 10) {
-            this._rxQueue.shift();
-        }
-        
-        // If not currently scheduling, start
-        if (!this._rxPlaying) {
-            this._rxPlaying = true;
-            this._rxBufferTime = this.audioContext.currentTime;
-            this._scheduleRxBuffer();
-        }
-    }
-    
-    _scheduleRxBuffer() {
-        if (!this.audioContext || this._rxQueue.length === 0) {
-            this._rxPlaying = false;
-            return;
+        // Simple jitter buffer: accumulate frames, play when ready
+        if (!this._rxJitterBuf) {
+            this._rxJitterBuf = [];
+            this._rxNextTime = 0;
+            this._rxStarted = false;
         }
         
         // Create or reuse RX analyser
@@ -634,30 +612,37 @@ class UVK5Remote {
             this.rxAnalyser.connect(this.audioContext.destination);
         }
         
-        // Schedule queued frames back-to-back
-        while (this._rxQueue.length > 0) {
-            const float32Array = this._rxQueue.shift();
-            
-            const buffer = this.audioContext.createBuffer(1, float32Array.length, 16000);
-            buffer.copyToChannel(float32Array, 0);
-            
-            const source = this.audioContext.createBufferSource();
-            source.buffer = buffer;
-            source.connect(this.rxAnalyser);
-            
-            // Schedule precisely after previous buffer
-            const startTime = Math.max(this._rxBufferTime, this.audioContext.currentTime);
-            source.start(startTime);
-            this._rxBufferTime = startTime + buffer.duration;
-            
-            // When this source ends, try scheduling more
-            source.onended = () => {
-                if (this._rxQueue.length > 0) {
-                    this._scheduleRxBuffer();
-                } else {
-                    this._rxPlaying = false;
+        const buffer = this.audioContext.createBuffer(1, float32Array.length, 16000);
+        buffer.copyToChannel(float32Array, 0);
+        const source = this.audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.rxAnalyser);
+        
+        // First few frames: buffer them to absorb jitter
+        if (!this._rxStarted) {
+            this._rxJitterBuf.push(source);
+            if (this._rxJitterBuf.length >= 3) {
+                // Drain buffer
+                this._rxNextTime = this.audioContext.currentTime + 0.01;
+                while (this._rxJitterBuf.length > 0) {
+                    const s = this._rxJitterBuf.shift();
+                    s.start(this._rxNextTime);
+                    this._rxNextTime += s.buffer.duration;
                 }
-            };
+                this._rxStarted = true;
+            }
+            return;
+        }
+        
+        // Normal playback: schedule right after previous
+        const now = this.audioContext.currentTime;
+        const startTime = Math.max(this._rxNextTime, now);
+        source.start(startTime);
+        this._rxNextTime = startTime + buffer.duration;
+        
+        // Reset if we get too far ahead ( > 500ms buffer)
+        if (this._rxNextTime - now > 0.5) {
+            this._rxNextTime = now;
         }
     }
     

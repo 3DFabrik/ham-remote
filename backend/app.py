@@ -790,8 +790,8 @@ class AudioStreamManager:
     
     SAMPLE_RATE = 16000
     CHANNELS = 1
-    FRAME_SIZE = 1280  # 80ms @ 16kHz = 1280 samples
-    FRAME_BYTES = 2560  # 1280 samples * 2 bytes (16-bit)
+    FRAME_SIZE = 480  # 30ms @ 16kHz = 480 samples
+    FRAME_BYTES = 960  # 480 samples * 2 bytes (16-bit)
     
     def __init__(self):
         self.tx_active = False
