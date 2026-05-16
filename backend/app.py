@@ -686,6 +686,19 @@ register_radio('yaesu-ft', 'Yaesu FT-7800/8300', 'CAT protocol, 9600 baud, RS232
 radio = UVK5Radio()
 current_radio_type = 'uvk5'
 
+# Persist radio type across restarts
+_RADIO_TYPE_FILE = os.path.join(os.path.dirname(__file__), '..', '.radio-type')
+if os.path.exists(_RADIO_TYPE_FILE):
+    try:
+        with open(_RADIO_TYPE_FILE) as f:
+            saved = f.read().strip()
+            if saved in RADIO_DRIVERS:
+                current_radio_type = saved
+                radio = RADIO_DRIVERS[saved]['cls']()
+                logger.info(f"Restored radio type: {RADIO_DRIVERS[saved]['label']}")
+    except Exception:
+        pass
+
 # Simulated mode for development without hardware
 SIMULATE = os.environ.get('UVK5_SIMULATE', 'true').lower() == 'true'
 
@@ -750,6 +763,13 @@ def api_radio_type():
     driver_info = RADIO_DRIVERS[new_type]
     radio = driver_info['cls']()
     current_radio_type = new_type
+    
+    # Persist
+    try:
+        with open(_RADIO_TYPE_FILE, 'w') as f:
+            f.write(new_type)
+    except Exception:
+        pass
     
     logger.info(f"Switched radio type to {driver_info['label']}")
     return jsonify({'success': True, 'type': current_radio_type, 'label': driver_info['label']})
