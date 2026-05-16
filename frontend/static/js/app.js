@@ -420,10 +420,7 @@ class UVK5Remote {
         }
         this.pttActive = true;
         this.els.pttButton.classList.add('active');
-        this._log('[PTT] TX on');
-        
-        this.socket.emit('audio_stop_rx');
-        this.socket.emit('ptt_press');
+        this._log('[PTT] TX on, micReady=' + this._micReady + ', stream=' + !!this.micStream);
         
         // Start recording from already-open mic stream
         try {
@@ -431,9 +428,9 @@ class UVK5Remote {
             const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
                 ? 'audio/webm;codecs=opus' : 'audio/ogg;codecs=opus';
             this._log('[PTT] mimeType: ' + mimeType);
-            this._log('[PTT] micStream tracks: ' + this.micStream.getTracks().length + ' active: ' + this.micStream.active);
+            this._log('[PTT] micStream: ' + this.micStream.getTracks().length + ' tracks, active=' + this.micStream.active);
             this.mediaRecorder = new MediaRecorder(this.micStream, { mimeType, audioBitsPerSecond: 24000 });
-            this._log('[PTT] MediaRecorder created, state: ' + this.mediaRecorder.state);
+            this._log('[PTT] MediaRecorder state: ' + this.mediaRecorder.state);
             this.mediaRecorder.ondataavailable = (e) => {
                 if (e.data.size > 0 && this.pttActive) {
                     const reader = new FileReader();
@@ -450,8 +447,11 @@ class UVK5Remote {
             this.mediaRecorder.start(20);
             this._log('[PTT] recording started');
         } catch (err) {
-            this._log('[PTT] recorder error: ' + err.name + ': ' + err.message);
+            this._log('[PTT] ERROR: ' + err.name + ': ' + err.message);
         }
+        
+        this.socket.emit('audio_stop_rx');
+        this.socket.emit('ptt_press');
     }
     
     pttOff() {
