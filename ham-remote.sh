@@ -20,10 +20,10 @@ check_running() {
 }
 
 kill_zombies() {
-    # Kill ALL processes listening on port 8080
-    local pids=$(lsof -t -i :$PORT 2>/dev/null)
+    # Kill only Python processes listening on port 8080 (not Caddy!)
+    local pids=$(lsof -t -i :$PORT -c python 2>/dev/null)
     if [ -n "$pids" ]; then
-        echo "🧟 Killing zombie processes on port $PORT: $pids"
+        echo "🧟 Killing zombie Python processes on port $PORT: $pids"
         echo "$pids" | xargs kill -9 2>/dev/null
         sleep 1
     fi
