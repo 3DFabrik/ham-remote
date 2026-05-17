@@ -3,3 +3,4 @@ key.pem
 ham-remote.pid
 .radio-type
 .settings
+__pycache__/
