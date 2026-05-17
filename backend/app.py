@@ -788,6 +788,13 @@ def api_get_settings():
 audio_playback_dev = os.environ.get('AUDIO_PLAYBACK', None)
 audio_capture_dev = os.environ.get('AUDIO_CAPTURE', None)
 
+# Restore audio settings from per-radio config
+_saved = _load_radio_settings(current_radio_type)
+if not audio_playback_dev and _saved.get('audio_playback'):
+    audio_playback_dev = _saved['audio_playback']
+if not audio_capture_dev and _saved.get('audio_capture'):
+    audio_capture_dev = _saved['audio_capture']
+
 
 def background_status_push():
     """Periodically push status updates to all connected clients."""

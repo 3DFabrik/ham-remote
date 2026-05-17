@@ -1104,14 +1104,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const portSel = document.getElementById('port-select');
             if (portSel) portSel.value = settings.port;
         }
-        if (settings.audio_playback) {
-            const pb = document.getElementById('audio-playback');
-            if (pb) pb.value = settings.audio_playback;
-        }
-        if (settings.audio_capture) {
-            const cap = document.getElementById('audio-capture');
-            if (cap) cap.value = settings.audio_capture;
-        }
+        // Audio settings restored by refreshAudioDevices() from /api/audio/config
         if (settings.radio_type) {
             const rt = document.getElementById('radio-type');
             if (rt) rt.value = settings.radio_type;
