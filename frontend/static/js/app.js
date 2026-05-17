@@ -67,7 +67,12 @@ class UVK5Remote {
         });
         
         this.socket.on('radio_update', (data) => {
+            const wasDisconnected = !this.connected;
             this.updateFromRadio(data);
+            // Auto-start RX audio when radio just connected
+            if (data.connected && wasDisconnected) {
+                this.startRxAudio();
+            }
         });
         
         this.socket.on('audio_tx', (data) => {
@@ -788,22 +793,30 @@ class UVK5Remote {
         const audioPlayback = this.els.audioPlayback?.value || '';
         const audioCapture = this.els.audioCapture?.value || '';
         
-        try {
-            const resp = await fetch('/api/connect', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ port, audio_playback: audioPlayback, audio_capture: audioCapture })
+        if (this.socket) {
+            // Show connecting state immediately
+            this.updateConnectionStatus(true);
+            this.els.statusText.textContent = 'Connecting...';
+            this.socket.emit('radio_connect', {
+                port,
+                audio_playback: audioPlayback,
+                audio_capture: audioCapture
             });
-            const data = await resp.json();
-            
-            if (data.success) {
-                this.updateConnectionStatus(true);
-                console.log('Radio connected');
-                // Auto-start RX audio via REST (more reliable than Socket.IO)
-                this.startRxAudio();
-            }
-        } catch (err) {
-            console.error('Connect error:', err);
+            // Radio update will arrive via socket event
+        } else {
+            // Fallback to HTTP
+            try {
+                const resp = await fetch('/api/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ port, audio_playback: audioPlayback, audio_capture: audioCapture })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.updateConnectionStatus(true);
+                    this.startRxAudio();
+                }
+            } catch (err) { console.error('Connect error:', err); }
         }
     }
     
@@ -836,7 +849,11 @@ class UVK5Remote {
     async disconnectRadio() {
         try {
             await this.stopRxAudio();
-            await fetch('/api/disconnect', { method: 'POST' });
+            if (this.socket) {
+                this.socket.emit('radio_disconnect');
+            } else {
+                await fetch('/api/disconnect', { method: 'POST' });
+            }
             this.updateConnectionStatus(false);
         } catch (err) {
             console.error('Disconnect error:', err);

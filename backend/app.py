@@ -1243,6 +1243,45 @@ def ws_ptt_release():
     emit('radio_update', radio.get_status(), broadcast=True)
 
 
+@socketio.on('radio_connect')
+def ws_radio_connect(data):
+    """Connect to radio via socket. Returns fast, init runs async."""
+    port = data.get('port')
+    audio_pb = data.get('audio_playback')
+    audio_cap = data.get('audio_capture')
+
+    # Apply audio config immediately
+    global audio_playback_dev, audio_capture_dev
+    if audio_pb:
+        audio_playback_dev = audio_pb
+    if audio_cap:
+        audio_capture_dev = audio_cap
+
+    # Save settings
+    _save_radio_settings(current_radio_type, data or {})
+
+    # Acknowledge immediately
+    emit('radio_connecting', {'status': 'connecting'})
+
+    # Run connect in background so we don't block
+    def _do_connect():
+        success = radio.connect(port)
+        socketio.emit('radio_update', radio.get_status())
+        if success:
+            logger.info(f"Radio connected via socket: {radio.port}")
+        else:
+            logger.warning("Radio connect failed")
+    eventlet.spawn(_do_connect)
+
+
+@socketio.on('radio_disconnect')
+def ws_radio_disconnect():
+    """Disconnect from radio via socket."""
+    radio.disconnect()
+    socketio.emit('radio_update', radio.get_status())
+    emit('radio_disconnected', {'success': True})
+
+
 @socketio.on('set_frequency')
 def ws_set_frequency(data):
     freq = data.get('frequency')
