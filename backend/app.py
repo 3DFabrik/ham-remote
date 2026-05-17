@@ -567,25 +567,13 @@ class XieguX6100Radio(UVK5Radio):
             return False
     
     def set_frequency(self, freq_mhz):
-        """Set frequency, read back and push to frontend."""
+        """Set frequency on radio (fire-and-forget, no blocking readback)."""
         freq_hz = int(freq_mhz * 1_000_000)
         bcd = self._freq_to_civ_bcd(freq_hz)
-        self._freq_set_at = time.time()  # suppress monitor
-        # Optimistically update
+        self._freq_set_at = time.time()  # suppress monitor for 3s
         self.current_freq = freq_mhz
-        socketio.emit('radio_update', self.get_status())
-        # Send set command
+        # Send set command – no sleep, no readback, no blocking
         self._send_civ(self.CMD_FREQ_SET, data=bcd, expect_response=False)
-        # Read back after brief pause
-        time.sleep(0.3)
-        confirmed = self.get_frequency()
-        if confirmed and abs(confirmed - freq_mhz) < 0.001:
-            # Radio confirmed - push again to be safe
-            socketio.emit('radio_update', self.get_status())
-        elif confirmed:
-            # Radio returned different freq - trust the radio
-            socketio.emit('radio_update', self.get_status())
-        # If confirmed is None (read failed), keep optimistic value
     
     def _freq_to_civ_bcd(self, freq_hz):
         """Convert Hz to CI-V BCD (5 bytes, MSB first per X6100 manual Table 2-1).
@@ -1242,6 +1230,14 @@ def ws_set_frequency(data):
     if freq:
         radio.set_frequency(float(freq))
         emit('radio_update', radio.get_status(), broadcast=True)
+        # Schedule async readback after 1s to confirm with radio
+        def _readback():
+            eventlet.sleep(1.0)
+            confirmed = radio.get_frequency()
+            if confirmed and abs(confirmed - float(freq)) > 0.001:
+                # Radio disagrees – trust the radio
+                socketio.emit('radio_update', radio.get_status())
+        eventlet.spawn(_readback)
 
 
 @socketio.on('audio_rx')

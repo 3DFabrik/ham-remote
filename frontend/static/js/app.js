@@ -341,13 +341,18 @@ class UVK5Remote {
         freq = Math.round(freq * 1000) / 1000; // kHz resolution
         
         this.frequency = freq;
+        this._freqSetAt = Date.now();
         this.updateFrequencyDisplay();
         
-        fetch('/api/frequency', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ frequency: freq })
-        }).catch(err => console.error('Set frequency error:', err));
+        if (this.socket) {
+            this.socket.emit('set_frequency', { frequency: freq });
+        } else {
+            fetch('/api/frequency', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ frequency: freq })
+            }).catch(err => console.error('Set frequency error:', err));
+        }
     }
     
     adjustDigit(index, delta) {
@@ -850,7 +855,19 @@ class UVK5Remote {
     
     updateFromRadio(data) {
         if (data.frequency !== undefined) {
-            this.frequency = data.frequency;
+            // Ignore stale freq updates right after user changed it
+            const now = Date.now();
+            if (this._freqSetAt && (now - this._freqSetAt) < 1500) {
+                // User recently changed freq – only accept if it matches
+                if (Math.abs(data.frequency - this.frequency) < 0.001) {
+                    // Confirmed by radio, clear debounce
+                    this._freqSetAt = null;
+                }
+                // else: ignore, keep local value
+            } else {
+                this.frequency = data.frequency;
+                this._freqSetAt = null;
+            }
             this.updateFrequencyDisplay();
         }
         if (data.squelch !== undefined) {
