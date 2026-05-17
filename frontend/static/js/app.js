@@ -1002,18 +1002,32 @@ class UVK5Remote {
             const result = await resp.json();
             if (result.success) {
                 console.log(`Switched to ${result.label}`);
-                this.refreshPorts();
                 // Apply saved settings for this radio type
-                if (result.settings) {
-                    if (result.settings.port) {
-                        this.els.portSelect.value = result.settings.port;
-                    }
-                    if (result.settings.audio_playback && this.els.audioPlayback) {
-                        this.els.audioPlayback.value = result.settings.audio_playback;
-                    }
-                    if (result.settings.audio_capture && this.els.audioCapture) {
-                        this.els.audioCapture.value = result.settings.audio_capture;
-                    }
+                const saved = result.settings || {};
+                // Refresh ports first, then set saved port after
+                await this.refreshPorts();
+                if (saved.port) {
+                    this.els.portSelect.value = saved.port;
+                }
+                // Refresh audio devices, then apply saved audio settings + send to backend
+                await this.refreshAudioDevices();
+                const pb = saved.audio_playback;
+                const cap = saved.audio_capture;
+                if (pb && this.els.audioPlayback) {
+                    this.els.audioPlayback.value = pb;
+                }
+                if (cap && this.els.audioCapture) {
+                    this.els.audioCapture.value = cap;
+                }
+                // Send audio config to backend so it takes effect
+                if (pb || cap) {
+                    try {
+                        await fetch('/api/audio/config', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ playback: pb || '', capture: cap || '' })
+                        });
+                    } catch (e) { console.error('Audio config restore error:', e); }
                 }
             }
         } catch (err) {
