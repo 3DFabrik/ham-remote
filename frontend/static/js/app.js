@@ -639,11 +639,13 @@ class UVK5Remote {
                 }
                 
                 if (this.opusDecoder) {
-                    this.opusDecoder.decodeFrame(bytes).then(result => {
-                        // opus-decoder returns { channelData: [Float32Array], samplesDecoded, sampleRate }
-                        const audio = result.channelData ? result.channelData[0] : result;
+                    // OpusDecoder.decodeFrame is synchronous (not WebWorker), returns result directly
+                    const result = this.opusDecoder.decodeFrame(bytes);
+                    // result = { channelData: [Float32Array], samplesDecoded, sampleRate }
+                    const audio = result.channelData ? result.channelData[0] : result;
+                    if (audio && audio.length > 0) {
                         this._playAndAnalyzeRx(audio);
-                    });
+                    }
                     return;
                 }
             } else if (data.codec === 'pcm') {

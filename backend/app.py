@@ -1090,8 +1090,8 @@ class AudioStreamManager:
     
     SAMPLE_RATE = 16000
     CHANNELS = 1
-    FRAME_SIZE = 480  # 30ms @ 16kHz = 480 samples
-    FRAME_BYTES = 960  # 480 samples * 2 bytes (16-bit)
+    FRAME_SIZE = 320  # 20ms @ 16kHz = 320 samples (Opus only supports 2.5/5/10/20/40/60ms)
+    FRAME_BYTES = 640  # 320 samples * 2 bytes (16-bit)
     # Send larger chunks to reduce WebSocket overhead
     CHUNK_FRAMES = 4  # 4 frames = 120ms per chunk
     CHUNK_BYTES = FRAME_BYTES * 4  # 3840 bytes per chunk
@@ -1211,8 +1211,21 @@ class AudioStreamManager:
                                 }, room=sid)
                     
                     if self._capture_process.poll() is not None:
-                        logger.warning("arecord process died, restarting...")
-                        eventlet.sleep(1)
+                        # Force-kill and wait to free the audio device
+                        try:
+                            self._capture_process.kill()
+                        except OSError:
+                            pass
+                        self._capture_process.wait()
+                        stderr = self._capture_process.stderr.read().decode()
+                        if stderr.strip():
+                            logger.warning(f"arecord stderr: {stderr.strip()}")
+                        logger.warning("arecord process died (rc=%d), restarting...", self._capture_process.returncode)
+                        self._capture_process = None
+                        # Also kill any stray arecord processes on this device
+                        subprocess.run(['pkill', '-9', '-f', f'arecord.*{device}'], 
+                                      capture_output=True, timeout=2)
+                        eventlet.sleep(2)  # Give ALSA time to release the device
                         
             except Exception as e:
                 logger.error(f"RX capture error: {e}")
