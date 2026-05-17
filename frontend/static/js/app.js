@@ -12,6 +12,7 @@ class UVK5Remote {
         this.squelch = 1;
         this.volume = 5;
         this.txPower = 'LOW';
+        this.mode = 'FM';
         this.simulate = false;
         this._rxStarted = false;
         this._wantRx = false;
@@ -199,7 +200,7 @@ class UVK5Remote {
         // Map dB to percentage: -60dB = 0%, 0dB = 100%
         const pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
         
-        // Mask covers (100 - pct)% from the right → reveals the LED gradient
+        // Mask covers (100 - pct)% from the right, revealing the gradient underneath
         maskEl.style.width = (100 - pct) + '%';
         
         // TX track: grey when mic on but not transmitting
@@ -221,8 +222,8 @@ class UVK5Remote {
         if (pct > this[peakKey]) {
             this[peakKey] = pct;
             this[peakTimeKey] = now;
-        } else if (now - this[peakTimeKey] > 1000) {
-            this[peakKey] = Math.max(pct, this[peakKey] - 0.3);
+        } else if (now - this[peakTimeKey] > 1500) {
+            this[peakKey] = Math.max(pct, this[peakKey] - 0.1);
         }
         
         if (peakEl) {
@@ -254,7 +255,7 @@ class UVK5Remote {
     _createAnalyser(source) {
         const analyser = this.audioContext.createAnalyser();
         analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.5;
+        analyser.smoothingTimeConstant = 0.85;
         source.connect(analyser);
         // Don't connect analyser to destination - it's just for measurement
         return analyser;
@@ -549,6 +550,13 @@ class UVK5Remote {
     // ============================================================
     
     setupControls() {
+        // Mode buttons
+        document.querySelectorAll('.btn-mode').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.setMode(btn.dataset.mode);
+            });
+        });
+        
         document.getElementById('sq-down').addEventListener('click', () => {
             this.setSquelch(Math.max(0, this.squelch - 1));
         });
@@ -600,6 +608,25 @@ class UVK5Remote {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ power })
         }).catch(err => console.error('Set power error:', err));
+    }
+    
+    setMode(mode) {
+        this.mode = mode;
+        // Update button states
+        document.querySelectorAll('.btn-mode').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.mode === mode);
+        });
+        
+        // Send to backend
+        if (this.socket && this.socket.connected) {
+            this.socket.emit('set_mode', { mode });
+        } else {
+            fetch('/api/mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode })
+            }).catch(err => console.error('Set mode error:', err));
+        }
     }
     
     // ============================================================
@@ -956,6 +983,12 @@ class UVK5Remote {
             this.els.powerToggle.textContent = data.tx_power;
             this.els.powerToggle.className = 'btn-toggle' + (data.tx_power === 'HIGH' ? ' high' : '');
         }
+        if (data.mode !== undefined) {
+            this.mode = data.mode;
+            document.querySelectorAll('.btn-mode').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.mode === data.mode);
+            });
+        }
         if (data.connected !== undefined) {
             this.updateConnectionStatus(data.connected);
         }
@@ -971,7 +1004,6 @@ class UVK5Remote {
     updateSMeter(value) {
         // value: 0-9 = S0-S9, 10-12 = +20/+40/+60
         const pct = Math.min(100, (value / 12) * 100);
-        // Mask: cover (100-pct)% from the right
         this.els.smeterFill.style.width = (100 - pct) + '%';
         
         let text;

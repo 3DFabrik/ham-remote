@@ -148,7 +148,7 @@ Browser Mic → MediaRecorder (WebM/Opus)
 |-------|-----------|----------|--------|
 | Quansheng UV-K5 | AIOC USB | Serial 38400 baud | 🚧 In progress |
 | Yaesu FT-7800/8300 | RS232 / FTDI | CAT 9600 baud | ✅ Working |
-| Xiegu X6100 | USB-C | CAT + Sound card | 📋 Planned |
+| Xiegu X6100 | USB-C | CAT + Sound card | 🧪 Partially tested |
 | Kenwood TS-2000 | RS232 | CAT 9600 baud | 📋 Planned |
 
 Adding a new radio: create a class extending `UVK5Radio`, register it with `register_radio()`.

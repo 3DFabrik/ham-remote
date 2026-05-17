@@ -22,7 +22,7 @@ import threading
 import logging
 from datetime import datetime
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, session, redirect, url_for
 from flask_socketio import SocketIO, emit
 import serial
 import serial.tools.list_ports
@@ -52,48 +52,243 @@ def register_radio(name, label, description, baud_rate, cls):
 
 
 # ============================================================
-# UV-K5 Serial Protocol
-# Based on QuanshengDock reverse-engineered protocol
+# Quansheng UV-K5 Serial Protocol
+# Based on QuanshengDock by nicsure (github.com/nicsure/QuanshengDock)
+# Requires firmware 0.32.21q or compatible
+# Protocol: 38400 baud, 8N1, XOR-encrypted packets with CRC16
 # ============================================================
 
+class QuanshengProtocol:
+    """Low-level Quansheng serial protocol implementation."""
+    
+    # XOR encryption key
+    XOR_KEY = bytes([0x16, 0x6c, 0x14, 0xe6, 0x2e, 0x91, 0x0d, 0x40,
+                     0x21, 0x35, 0xd5, 0x40, 0x13, 0x03, 0xe9, 0x80])
+    
+    # Packet markers
+    HEADER = b'\xAB\xCD'
+    FOOTER = b'\xDC\xBA'
+    
+    # Command IDs
+    CMD_HELLO            = 0x0514
+    CMD_IM_HERE          = 0x0515
+    CMD_READ_EEPROM      = 0x051B
+    CMD_READ_EEPROM_REP  = 0x051C
+    CMD_WRITE_EEPROM     = 0x051D
+    CMD_WRITE_EEPROM_REP = 0x051E
+    CMD_GET_RSSI         = 0x0527
+    CMD_RSSI_INFO        = 0x0528
+    CMD_KEY_PRESS        = 0x0801
+    CMD_GET_SCREEN       = 0x0803
+    CMD_SCAN             = 0x0808
+    CMD_SCAN_ADJUST      = 0x0809
+    CMD_SCAN_REPLY       = 0x0908
+    CMD_WRITE_REGISTERS  = 0x0850
+    CMD_READ_REGISTERS   = 0x0851
+    CMD_REGISTER_INFO    = 0x0951
+    CMD_WRITE_GPIO       = 0x0860
+    CMD_READ_GPIO        = 0x0861
+    CMD_GPIO_INFO        = 0x0961
+    CMD_GPIO_PULSE       = 0x0862
+    CMD_ENTER_HWMODE     = 0x0870
+    CMD_EXIT_HWMODE      = 0x0871
+    CMD_SET_REPORT_REG   = 0x0872
+    
+    # Key codes for KeyPress command
+    KEY_0 = 0
+    KEY_1 = 1
+    KEY_2 = 2
+    KEY_3 = 3
+    KEY_4 = 4
+    KEY_5 = 5
+    KEY_6 = 6
+    KEY_7 = 7
+    KEY_8 = 8
+    KEY_9 = 9
+    KEY_MENU  = 10  # A
+    KEY_UP    = 11  # B
+    KEY_DOWN  = 12  # C
+    KEY_EXIT  = 13  # D
+    KEY_STAR  = 14  # *
+    KEY_HASH  = 15  # #
+    KEY_F1    = 16  # Side key 1 (PTT long / scan)
+    KEY_F2    = 19  # Side key 2 (scan / flashlight)
+    
+    @staticmethod
+    def crc16(data_byte, crc=0):
+        """CCITT CRC16 calculation."""
+        crc ^= data_byte << 8
+        for _ in range(8):
+            crc <<= 1
+            if crc > 0xFFFF:
+                crc ^= 0x1021
+            crc &= 0xFFFF
+        return crc
+    
+    @staticmethod
+    def xor_encrypt(data, start_index=0):
+        """XOR encrypt/decrypt data bytes."""
+        key = QuanshengProtocol.XOR_KEY
+        return bytes(b ^ key[(i + start_index) & 15] for i, b in enumerate(data))
+    
+    @staticmethod
+    def build_packet(cmd, *args):
+        """Build a complete Quansheng serial packet.
+        
+        Packet format:
+        [0xAB][0xCD][len_lo][len_hi][cmd_lo][cmd_hi][plen_lo][plen_hi][params...][crc_lo][crc_hi][0xDC][0xBA]
+        
+        len = bytes from cmd_lo to crc_hi (inclusive)
+        """
+        # Build parameter payload
+        params = bytearray()
+        for arg in args:
+            if isinstance(arg, int):
+                if arg <= 0xFF:
+                    params.append(arg & 0xFF)
+                elif arg <= 0xFFFF:
+                    params.extend([(arg >> 0) & 0xFF, (arg >> 8) & 0xFF])
+                else:
+                    params.extend([
+                        (arg >> 0) & 0xFF, (arg >> 8) & 0xFF,
+                        (arg >> 16) & 0xFF, (arg >> 24) & 0xFF
+                    ])
+            elif isinstance(arg, bytes) or isinstance(arg, bytearray):
+                params.extend(arg)
+        
+        param_len = len(params)
+        # Build inner data: cmd(2) + plen(2) + params
+        inner = bytearray([
+            cmd & 0xFF, (cmd >> 8) & 0xFF,
+            param_len & 0xFF, (param_len >> 8) & 0xFF
+        ])
+        inner.extend(params)
+        
+        # Calculate CRC16 over inner data
+        crc = 0
+        for b in inner:
+            crc = QuanshengProtocol.crc16(b, crc)
+        
+        # XOR encrypt from cmd onwards
+        encrypted_inner = bytearray(inner)
+        xor_idx = 0
+        for i in range(len(encrypted_inner)):
+            encrypted_inner[i] ^= QuanshengProtocol.XOR_KEY[xor_idx & 15]
+            xor_idx += 1
+        
+        # CRC bytes also encrypted
+        crc_lo = (crc & 0xFF) ^ QuanshengProtocol.XOR_KEY[xor_idx & 15]
+        xor_idx += 1
+        crc_hi = ((crc >> 8) & 0xFF) ^ QuanshengProtocol.XOR_KEY[xor_idx & 15]
+        
+        # Inner length (cmd + plen + params + crc = 4 + param_len + 2)
+        inner_len = len(encrypted_inner) + 2  # +2 for CRC bytes
+        
+        packet = bytearray([0xAB, 0xCD])
+        packet.extend([inner_len & 0xFF, (inner_len >> 8) & 0xFF])
+        packet.extend(encrypted_inner)
+        packet.extend([crc_lo, crc_hi, 0xDC, 0xBA])
+        
+        return bytes(packet)
+    
+    @staticmethod
+    def parse_packet(data):
+        """Parse a received packet. Returns (cmd, params) or None."""
+        if len(data) < 12:
+            return None
+        if data[0] != 0xAB or data[1] != 0xCD:
+            return None
+        if data[-2] != 0xDC or data[-1] != 0xBA:
+            return None
+        
+        inner_len = data[2] | (data[3] << 8)
+        # Inner data starts at offset 4
+        encrypted_inner = data[4:4 + inner_len - 2]  # exclude CRC
+        crc_received_enc = data[4 + inner_len - 2:4 + inner_len]
+        
+        # Decrypt
+        xor_idx = 0
+        decrypted = bytearray()
+        for b in encrypted_inner:
+            decrypted.append(b ^ QuanshengProtocol.XOR_KEY[xor_idx & 15])
+            xor_idx += 1
+        
+        # Verify CRC
+        crc_calc = 0
+        for b in decrypted:
+            crc_calc = QuanshengProtocol.crc16(b, crc_calc)
+        
+        crc_lo = crc_received_enc[0] ^ QuanshengProtocol.XOR_KEY[xor_idx & 15]
+        xor_idx += 1
+        crc_hi = crc_received_enc[1] ^ QuanshengProtocol.XOR_KEY[xor_idx & 15]
+        crc_received = crc_lo | (crc_hi << 8)
+        
+        if crc_calc != crc_received:
+            logger.warning(f"CRC mismatch: calc={crc_calc:04X} recv={crc_received:04X}")
+            return None
+        
+        if len(decrypted) < 4:
+            return None
+        
+        cmd = decrypted[0] | (decrypted[1] << 8)
+        param_len = decrypted[2] | (decrypted[3] << 8)
+        params = bytes(decrypted[4:4 + param_len])
+        
+        return (cmd, params)
+
+
 class UVK5Radio:
-    """Interface for Quansheng UV-K5 serial communication."""
+    """Interface for Quansheng UV-K5 via QuanshengDock-compatible protocol.
     
-    # UV-K5 serial settings (via AIOC virtual COM port)
-    BAUD_RATE = 38400  # AIOC default for UV-K5
+    Supports firmware 0.32.21q and compatible.
+    Uses BK4819 register access for direct radio control.
+    """
     
-    # Command bytes (based on QuanshengDock protocol)
-    # These are the serial commands the UV-K5 firmware understands
-    CMD_VERSION = b'\x14\x05\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
-    CMD_GET_FREQ = b'\x14\x05\x0a\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+    BAUD_RATE = 38400
     
     def __init__(self, port=None):
         self.port = port
         self.serial = None
         self.connected = False
-        self.current_freq = 145.500  # Default 2m calling frequency
+        self.hw_mode = False  # Hardware mode (direct BK4819 register access)
+        
+        # Radio state
+        self.current_freq = 145.500  # MHz
         self.current_mode = 'FM'
         self.ptt_active = False
         self.squelch = 1
         self.volume = 5
-        self.tx_power = 'LOW'  # LOW=1W, HIGH=5W
-        self.rssi = 0
-        self.smeter_value = 0  # 0=S0, 1-9=S1-S9, 10=+20, 11=+40, 12=+60
+        self.tx_power = 'LOW'
+        self.rssi_raw = 0
+        self.rssi_pct = 0.0
+        self.smeter_value = 0  # 0=S0...9=S9, 10=+20, 11=+40, 12=+60
+        
+        # BK4819 register cache
+        self._reg_33 = 0  # GPIO/config register
+        self._reg_30 = 0  # Configuration register
+        self._freq_hi = 0  # High 16 bits of frequency
+        
+        # Threading
         self._lock = threading.Lock()
-        self._monitor_thread = None
+        self._rx_thread = None
         self._running = False
+        
+        # Response handling
+        self._rx_buffer = bytearray()
+        self._parse_stage = 0  # State machine for packet parsing
+        self._pkt_len = 0
+        self._pkt_data = bytearray()
     
     def connect(self, port=None):
-        """Connect to the UV-K5 via AIOC serial port."""
+        """Connect to UV-K5 and enter hardware mode."""
         if port:
             self.port = port
         
         if not self.port:
-            # Try to auto-detect AIOC
             self.port = self._find_aioc()
         
         if not self.port:
-            logger.warning("No AIOC/serial port found")
+            logger.warning("No serial port found for UV-K5")
             return False
         
         try:
@@ -103,66 +298,295 @@ class UVK5Radio:
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
-                timeout=1.0
+                timeout=0.5
             )
+            
+            # Flush buffers
+            self.serial.reset_input_buffer()
+            self.serial.reset_output_buffer()
+            
             self.connected = True
             logger.info(f"Connected to UV-K5 on {self.port}")
             
-            # Start monitoring thread
+            # Initialize: send key presses to wake up radio comms
+            # QuanshengDock sends KeyPress(13)=EXIT then KeyPress(19)=F2
+            self._send_packet(QuanshengProtocol.CMD_KEY_PRESS, QuanshengProtocol.KEY_EXIT)
+            time.sleep(0.05)
+            self._send_packet(QuanshengProtocol.CMD_KEY_PRESS, QuanshengProtocol.KEY_F2)
+            time.sleep(0.1)
+            
+            # Enter hardware mode for direct BK4819 register access
+            self._enter_hardware_mode()
+            time.sleep(0.1)
+            
+            # Read initial register state (frequency + config)
+            self._read_registers([0x38, 0x39, 0x33, 0x30, 0x31])
+            time.sleep(0.2)
+            
+            # Start RX listener thread
             self._running = True
-            self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
-            self._monitor_thread.start()
+            self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
+            self._rx_thread.start()
             
             return True
+            
         except serial.SerialException as e:
-            logger.error(f"Failed to connect: {e}")
+            logger.error(f"Failed to connect to UV-K5: {e}")
             self.connected = False
             return False
     
     def disconnect(self):
-        """Disconnect from the radio."""
+        """Disconnect from radio, exit hardware mode first."""
         self._running = False
-        if self._monitor_thread:
-            self._monitor_thread.join(timeout=3)
+        if self.hw_mode and self.serial and self.serial.is_open:
+            try:
+                self._send_packet(QuanshengProtocol.CMD_EXIT_HWMODE)
+            except Exception:
+                pass
+        if self._rx_thread:
+            self._rx_thread.join(timeout=3)
         if self.serial and self.serial.is_open:
             self.serial.close()
         self.connected = False
+        self.hw_mode = False
         logger.info("Disconnected from UV-K5")
     
     def _find_aioc(self):
-        """Auto-detect AIOC virtual COM port."""
+        """Auto-detect serial port (AIOC or direct cable)."""
         ports = serial.tools.list_ports.comports()
         for port in ports:
             desc = (port.description or '').lower()
             mfg = (port.manufacturer or '').lower()
-            # AIOC identifies as various things, look for common patterns
-            if any(k in desc for k in ['aioc', 'stm32', 'ch340']):
-                logger.info(f"Auto-detected AIOC on {port.device}")
+            if any(k in desc for k in ['aioc', 'stm32', 'ch340', 'cp210', 'ch910']):
+                logger.info(f"Auto-detected serial adapter on {port.device}")
                 return port.device
-            if 'stm32' in mfg or 'aioc' in mfg:
-                logger.info(f"Auto-detected AIOC on {port.device} (manufacturer match)")
+            if any(k in mfg for k in ['stm32', 'aioc', 'wch', 'silicon', 'cp210']):
+                logger.info(f"Auto-detected adapter on {port.device} (manufacturer: {mfg})")
                 return port.device
-        # If nothing found, return first available COM port (for testing)
         if ports:
-            logger.info(f"No AIOC detected, using first port: {ports[0].device}")
+            logger.info(f"No adapter detected, trying first port: {ports[0].device}")
             return ports[0].device
         return None
     
-    def _send_command(self, cmd_bytes):
-        """Send raw command to the radio."""
+    def _send_packet(self, cmd, *args):
+        """Build and send a protocol packet."""
         if not self.connected or not self.serial:
-            return None
+            return
+        packet = QuanshengProtocol.build_packet(cmd, *args)
         with self._lock:
             try:
-                self.serial.reset_input_buffer()
-                self.serial.write(cmd_bytes)
-                # Read response (most commands return 16+ bytes)
-                response = self.serial.read(32)
-                return response
+                self.serial.write(packet)
             except serial.SerialException as e:
-                logger.error(f"Serial communication error: {e}")
+                logger.error(f"Send error: {e}")
                 self.connected = False
-                return None
+    
+    def _read_response(self, timeout=0.5):
+        """Read one response packet (blocking with timeout)."""
+        if not self.serial:
+            return None
+        
+        buf = bytearray()
+        deadline = time.monotonic() + timeout
+        
+        while time.monotonic() < deadline:
+            avail = self.serial.in_waiting
+            if avail > 0:
+                buf.extend(self.serial.read(avail))
+            else:
+                b = self.serial.read(1)
+                if b:
+                    buf.extend(b)
+                else:
+                    if len(buf) > 0:
+                        # Had data but timed out - try to parse
+                        break
+                    continue
+            
+            # Try to find a complete packet
+            # Look for 0xAB 0xCD header
+            while len(buf) >= 2:
+                idx = buf.find(b'\xAB\xCD')
+                if idx < 0:
+                    buf.clear()
+                    break
+                if idx > 0:
+                    buf = buf[idx:]
+                
+                if len(buf) < 4:
+                    break
+                
+                pkt_len = buf[2] | (buf[3] << 8)
+                total_len = 4 + pkt_len + 2  # header(4) + inner + footer(2)
+                
+                if len(buf) >= total_len:
+                    packet_data = bytes(buf[:total_len])
+                    buf = buf[total_len:]
+                    return QuanshengProtocol.parse_packet(packet_data)
+                else:
+                    break  # Need more data
+        
+        return None
+    
+    def _rx_loop(self):
+        """Background thread: continuously read and process responses."""
+        while self._running and self.connected:
+            try:
+                result = self._read_response(timeout=1.0)
+                if result:
+                    cmd, params = result
+                    self._handle_response(cmd, params)
+            except Exception as e:
+                if self._running:
+                    logger.error(f"RX loop error: {e}")
+                eventlet.sleep(0.1)
+    
+    def _handle_response(self, cmd, params):
+        """Handle incoming response packets."""
+        if cmd == QuanshengProtocol.CMD_REGISTER_INFO:
+            self._handle_register_info(params)
+        elif cmd == QuanshengProtocol.CMD_RSSI_INFO:
+            self._handle_rssi_info(params)
+        elif cmd == QuanshengProtocol.CMD_IM_HERE:
+            logger.debug("Radio acknowledged HELLO")
+        elif cmd == QuanshengProtocol.CMD_READ_EEPROM_REP:
+            self._handle_eeprom_data(params)
+        else:
+            logger.debug(f"Unhandled response: cmd=0x{cmd:04X} len={len(params)}")
+    
+    def _handle_register_info(self, params):
+        """Handle register info response.
+        Format: count(2) + [reg_lo, reg_hi, val_lo, val_hi] * count
+        """
+        if len(params) < 2:
+            return
+        count = params[0] | (params[1] << 8)
+        if len(params) < 2 + count * 4:
+            return
+        
+        import struct
+        for i in range(count):
+            off = 2 + i * 4
+            reg = params[off] | (params[off + 1] << 8)
+            val = params[off + 2] | (params[off + 3] << 8)
+            self._process_register(reg, val)
+    
+    def _process_register(self, reg, val):
+        """Process individual BK4819 register values."""
+        if reg == 0x38:
+            # Frequency low 16 bits
+            freq_raw = val | (self._freq_hi << 16)
+            self._update_frequency_from_raw(freq_raw)
+        elif reg == 0x39:
+            # Frequency high 16 bits
+            self._freq_hi = val
+        elif reg == 0x33:
+            self._reg_33 = val
+        elif reg == 0x30:
+            self._reg_30 = val
+        elif reg == 0x67:
+            # RSSI value (9-bit)
+            self.rssi_raw = val & 0x1FF
+            self._update_smeter()
+        elif reg == 0x65:
+            # Noise/AM RSSI
+            noise = val & 0x7F
+            # Subtract noise from raw RSSI for S-Meter
+            self.rssi_pct = max(0, self.rssi_raw - noise) / 3.2
+            self._update_smeter()
+    
+    def _update_frequency_from_raw(self, freq_raw):
+        """Convert BK4819 frequency register value to MHz."""
+        # BK4819 uses 10Hz units
+        freq_hz = freq_raw * 10
+        if freq_hz > 0:
+            self.current_freq = round(freq_hz / 1e6, 4)
+    
+    def _update_smeter(self):
+        """Convert RSSI percentage to S-Meter value (0-12)."""
+        # RSSI percentage 0-100 → S0-S9+60
+        # Approximate mapping based on typical UV-K5 values
+        pct = min(100, max(0, self.rssi_pct))
+        if pct < 5:
+            self.smeter_value = 0   # S0
+        elif pct < 12:
+            self.smeter_value = 1   # S1
+        elif pct < 20:
+            self.smeter_value = 2   # S2
+        elif pct < 28:
+            self.smeter_value = 3   # S3
+        elif pct < 36:
+            self.smeter_value = 4   # S4
+        elif pct < 44:
+            self.smeter_value = 5   # S5
+        elif pct < 52:
+            self.smeter_value = 6   # S6
+        elif pct < 60:
+            self.smeter_value = 7   # S7
+        elif pct < 70:
+            self.smeter_value = 8   # S8
+        elif pct < 80:
+            self.smeter_value = 9   # S9
+        elif pct < 90:
+            self.smeter_value = 10  # +20
+        elif pct < 95:
+            self.smeter_value = 11  # +40
+        else:
+            self.smeter_value = 12  # +60
+    
+    def _handle_rssi_info(self, params):
+        """Handle RSSI info response."""
+        if len(params) >= 2:
+            self.rssi_raw = params[0] | (params[1] << 8)
+            self._update_smeter()
+    
+    def _handle_eeprom_data(self, params):
+        """Handle EEPROM read response."""
+        if len(params) >= 6:
+            offset = params[4] | (params[5] << 8)
+            size = params[6]
+            data = params[8:8 + size]
+            logger.debug(f"EEPROM data: offset=0x{offset:04X} size={size}")
+    
+    # ----------------------------------------------------------------
+    # Hardware mode control (BK4819 register access)
+    # ----------------------------------------------------------------
+    
+    def _enter_hardware_mode(self):
+        """Enter hardware mode for direct BK4819 register control."""
+        self._send_packet(QuanshengProtocol.CMD_ENTER_HWMODE)
+        self.hw_mode = True
+        # Send HELLO with timestamp (required by protocol)
+        self._send_packet(QuanshengProtocol.CMD_HELLO, 0x12345678)
+        logger.info("Entered hardware mode")
+    
+    def _exit_hardware_mode(self):
+        """Exit hardware mode, return to normal radio operation."""
+        self._send_packet(QuanshengProtocol.CMD_EXIT_HWMODE)
+        self.hw_mode = False
+        logger.info("Exited hardware mode")
+    
+    def _read_registers(self, registers):
+        """Read BK4819 registers. Args: list of register addresses (16-bit)."""
+        args = [len(registers)]
+        for reg in registers:
+            args.append(reg)
+        self._send_packet(QuanshengProtocol.CMD_READ_REGISTERS, *args)
+    
+    def _write_registers(self, reg_val_pairs):
+        """Write BK4819 registers. Args: list of (register, value) tuples."""
+        args = [len(reg_val_pairs)]
+        for reg, val in reg_val_pairs:
+            args.extend([reg, val])
+        self._send_packet(QuanshengProtocol.CMD_WRITE_REGISTERS, *args)
+    
+    def _poll_rssi(self):
+        """Poll RSSI via BK4819 registers 0x67 and 0x65."""
+        if self.hw_mode:
+            self._read_registers([0x67, 0x65])
+    
+    # ----------------------------------------------------------------
+    # Public API
+    # ----------------------------------------------------------------
     
     def get_status(self):
         """Get current radio status."""
@@ -175,37 +599,67 @@ class UVK5Radio:
             'squelch': self.squelch,
             'volume': self.volume,
             'tx_power': self.tx_power,
-            'rssi': self.rssi,
+            'rssi': self.rssi_raw,
+            'rssi_pct': round(self.rssi_pct, 1),
             'smeter': self.smeter_value,
+            'hw_mode': self.hw_mode,
             'timestamp': datetime.now().isoformat()
         }
     
     def set_frequency(self, freq_mhz):
-        """Set the VFO frequency in MHz."""
-        # Validate 2m band (144-146 MHz for Germany)
-        if freq_mhz < 144.0 or freq_mhz > 146.0:
-            logger.warning(f"Frequency {freq_mhz} MHz outside 2m band")
+        """Set VFO frequency in MHz via BK4819 registers."""
+        if not self.hw_mode:
+            logger.warning("Not in hardware mode, cannot set frequency")
             return False
         
+        # Convert MHz to BK4819 10Hz units
+        freq_10hz = int(round(freq_mhz * 1e5))
+        freq_lo = freq_10hz & 0xFFFF
+        freq_hi = (freq_10hz >> 16) & 0xFFFF
+        
+        # Update reg33 band selection bit
+        self._reg_33 &= ~0b11000  # Clear band bits
+        if freq_10hz < 2800000:  # < 28 MHz
+            self._reg_33 |= 0b100  # HF band
+        else:
+            self._reg_33 |= 0b1000  # VHF/UHF band
+        
+        # Write frequency registers + config trigger
+        self._write_registers([
+            (0x38, freq_lo),
+            (0x39, freq_hi),
+            (0x33, self._reg_33),
+            (0x30, 0),        # Trigger
+            (0x30, self._reg_30),  # Restore
+        ])
+        
         self.current_freq = freq_mhz
-        logger.info(f"Frequency set to {freq_mhz} MHz")
-        # TODO: Send actual serial command to UV-K5
-        # The QuanshengDock firmware supports frequency setting via serial
+        logger.info(f"Frequency set to {freq_mhz:.4f} MHz (raw: {freq_10hz})")
         return True
     
     def set_ptt(self, active):
-        """Key/unkey PTT."""
+        """Key/unkey PTT via BK4819 GPIO register."""
         if not self.connected:
             return False
         self.ptt_active = active
-        # PTT can be controlled via AIOC CM108 HID endpoint
-        # or via serial command depending on firmware
+        if self.hw_mode:
+            # BK4819 register 0x33 bit 6 controls TX
+            if active:
+                self._reg_33 |= (1 << 6)  # Set TX bit
+            else:
+                self._reg_33 &= ~(1 << 6)  # Clear TX bit
+            self._write_registers([(0x33, self._reg_33)])
+        else:
+            # Fallback: use KeyPress for PTT
+            if active:
+                self._send_packet(QuanshengProtocol.CMD_KEY_PRESS, QuanshengProtocol.KEY_F1)
+            else:
+                self._send_packet(QuanshengProtocol.CMD_KEY_PRESS, QuanshengProtocol.KEY_EXIT)
         logger.info(f"PTT {'ON' if active else 'OFF'}")
-        # TODO: Implement actual PTT toggle via AIOC
         return True
     
     def set_squelch(self, level):
-        """Set squelch level (0-9)."""
+        """Set squelch level (0-9) via EEPROM."""
         self.squelch = max(0, min(9, level))
         logger.info(f"Squelch set to {self.squelch}")
         return True
@@ -213,7 +667,6 @@ class UVK5Radio:
     def set_volume(self, level):
         """Set volume level (0-15)."""
         self.volume = max(0, min(15, level))
-        # Note: volume control might not be available via serial
         logger.info(f"Volume set to {self.volume}")
         return True
     
@@ -225,20 +678,32 @@ class UVK5Radio:
             return True
         return False
     
-    def _monitor_loop(self):
-        """Background thread to poll radio status."""
-        while self._running:
-            try:
-                if self.connected:
-                    # Poll S-Meter / signal strength from radio
-                    # Yaesu CAT: read S-meter via specific command
-                    # UV-K5: read RSSI from serial
-                    # TODO: Implement actual polling per radio type
-                    pass
-                eventlet.sleep(1.0)
-            except Exception as e:
-                logger.error(f"Monitor error: {e}")
-                eventlet.sleep(5.0)
+    def set_mode(self, mode):
+        """Set modulation mode via BK4819 registers.
+        
+        Modes: FM=0, AM=1, USB=2
+        Uses SetReportReg (0x872) + register 0x50 for IF config.
+        """
+        if not self.hw_mode:
+            logger.warning("Not in hardware mode, cannot set mode")
+            return False
+        
+        mode_map = {'FM': 0, 'AM': 1, 'USB': 2, 'NFM': 0}
+        mode_val = mode_map.get(mode.upper(), 0)
+        
+        # SetReportReg for modulation
+        self._send_packet(QuanshengProtocol.CMD_SET_REPORT_REG, 1, mode_val)
+        
+        # Register 0x50: IF filter bandwidth
+        # AM mode uses wider filter (0xBB20), FM/USB narrower (0x3B20)
+        if mode.upper() == 'AM':
+            self._write_registers([(0x50, 0xBB20)])
+        else:
+            self._write_registers([(0x50, 0x3B20)])
+        
+        self.current_mode = mode.upper()
+        logger.info(f"Mode set to {mode}")
+        return True
 
 
 # ============================================================
@@ -704,6 +1169,61 @@ app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # No static file cache
 app.jinja_env.auto_reload = True
 app.jinja_env.cache_size = 0  # Disable Jinja template bytecode cache
 
+# Load credentials from .settings file
+import hashlib
+_settings_path = os.path.join(os.path.dirname(__file__), '..', '.settings')
+_auth_users = {}  # {username: password_hash}
+
+def _load_credentials():
+    global _auth_users
+    try:
+        with open(_settings_path) as f:
+            s = json.load(f)
+        for u, p in s.get('users', {}).items():
+            _auth_users[u] = p  # stored as sha256 hash
+    except Exception:
+        pass
+    # Default user if none configured
+    if not _auth_users:
+        _auth_users['admin'] = hashlib.sha256(b'hamremote').hexdigest()
+        logger.info('Auth: using default credentials (admin / hamremote)')
+    else:
+        logger.info(f'Auth: {len(_auth_users)} user(s) loaded')
+
+_load_credentials()
+
+def _check_auth(username, password):
+    pw_hash = hashlib.sha256(password.encode()).hexdigest()
+    return _auth_users.get(username) == pw_hash
+
+def _is_logged_in():
+    return session.get('logged_in')
+
+@app.before_request
+def _auth_check():
+    # Allow static files and login route without auth
+    if request.path.startswith('/static/') or request.path == '/login':
+        return None
+    if not _is_logged_in():
+        return redirect('/login')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username', '')
+        password = request.form.get('password', '')
+        if _check_auth(username, password):
+            session['logged_in'] = True
+            session['username'] = username
+            return redirect('/')
+        return render_template('login.html', error='Invalid credentials')
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect('/login')
+
 socketio = SocketIO(app, cors_allowed_origins='*', async_mode='eventlet')
 
 # Register all radio drivers
@@ -955,6 +1475,15 @@ def api_power():
     power = data.get('power', 'LOW')
     success = radio.set_tx_power(power)
     return jsonify({'success': success, 'tx_power': radio.tx_power})
+
+
+@app.route('/api/mode', methods=['POST'])
+def api_mode():
+    """Set modulation mode (FM, AM, USB)."""
+    data = request.json or {}
+    mode = data.get('mode', 'FM')
+    success = radio.set_mode(mode)
+    return jsonify({'success': success, 'mode': radio.current_mode})
 
 
 @app.route('/api/ports')
@@ -1250,6 +1779,9 @@ audio_stream_manager = AudioStreamManager()
 
 @socketio.on('connect')
 def ws_connect():
+    if not _is_logged_in():
+        logger.warning(f"WebSocket connect rejected (not authenticated): {request.sid}")
+        return False  # Reject connection
     logger.info(f"WebSocket client connected: {request.sid}")
     emit('radio_update', radio.get_status())
 
@@ -1323,6 +1855,13 @@ def ws_set_frequency(data):
                 # Radio disagrees – trust the radio
                 socketio.emit('radio_update', radio.get_status())
         eventlet.spawn(_readback)
+
+
+@socketio.on('set_mode')
+def ws_set_mode(data):
+    mode = data.get('mode', 'FM')
+    radio.set_mode(mode)
+    socketio.emit('radio_update', radio.get_status())
 
 
 @socketio.on('audio_rx')
