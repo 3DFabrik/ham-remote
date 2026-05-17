@@ -4,14 +4,18 @@ Web interface for remote operation of amateur radio transceivers from any browse
 
 **Made by Norbot 🤖**
 
-![HAM Remote Screenshot](frontend/static/img/screenshot.png)
+![HAM Remote Screenshot](docs/screenshot-main.png)
+
+*Login page:*
+
+![Login Page](docs/screenshot-login.png)
 
 ## Features
 
 ### 🎛️ Controls
 - Frequency display with digit-by-digit tuning
 - Squelch / Volume / TX Power controls
-- Quick frequency buttons (DMR, Calling, Relays)
+- Mode selector (FM / AM / USB)
 - Live S-Meter (S0 – S9+60, animated)
 - RF / RX / TX level meter bars with LED-strip style gradient
 
