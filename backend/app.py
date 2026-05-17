@@ -739,32 +739,50 @@ def _load_settings():
     try:
         if os.path.exists(_SETTINGS_FILE):
             with open(_SETTINGS_FILE) as f:
-                return json.load(f)
+                data = json.load(f)
+                # Migration: flat format → per-radio format
+                if 'port' in data and 'radios' not in data:
+                    migrated = {'radios': {}}
+                    for key in ['port', 'audio_playback', 'audio_capture']:
+                        if key in data:
+                            migrated[key] = data[key]
+                    return migrated
+                return data
     except Exception:
         pass
     return {}
 
 
-def _save_settings(data):
-    """Save settings to file."""
+def _load_radio_settings(radio_type):
+    """Load settings for a specific radio type."""
+    settings = _load_settings()
+    radios = settings.get('radios', {})
+    return radios.get(radio_type, {})
+
+
+def _save_radio_settings(radio_type, data):
+    """Save settings for a specific radio type."""
     try:
         current = _load_settings()
-        # Only save relevant fields
+        if 'radios' not in current:
+            current['radios'] = {}
+        radio_cfg = current['radios'].get(radio_type, {})
         for key in ['port', 'audio_playback', 'audio_capture']:
             if key in data:
-                current[key] = data[key]
+                radio_cfg[key] = data[key]
+        current['radios'][radio_type] = radio_cfg
         with open(_SETTINGS_FILE, 'w') as f:
-            json.dump(current, f)
+            json.dump(current, f, indent=2)
     except Exception as e:
         logger.error(f"Failed to save settings: {e}")
 
 
 @app.route('/api/settings')
 def api_get_settings():
-    """Get saved settings."""
-    settings = _load_settings()
-    settings['radio_type'] = current_radio_type
-    return jsonify(settings)
+    """Get saved settings for the current radio type."""
+    radio_settings = _load_radio_settings(current_radio_type)
+    radio_settings['radio_type'] = current_radio_type
+    return jsonify(radio_settings)
 
 # Active audio devices
 audio_playback_dev = os.environ.get('AUDIO_PLAYBACK', None)
@@ -836,7 +854,8 @@ def api_radio_type():
         pass
     
     logger.info(f"Switched radio type to {driver_info['label']}")
-    return jsonify({'success': True, 'type': current_radio_type, 'label': driver_info['label']})
+    saved = _load_radio_settings(new_type)
+    return jsonify({'success': True, 'type': current_radio_type, 'label': driver_info['label'], 'settings': saved})
 
 
 @app.route('/')
@@ -858,8 +877,8 @@ def api_connect():
     
     success = radio.connect(port)
     
-    # Save settings
-    _save_settings(data)
+    # Save settings per radio type
+    _save_radio_settings(current_radio_type, data)
     
     return jsonify({'success': success, 'port': radio.port})
 

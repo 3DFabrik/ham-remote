@@ -1003,6 +1003,18 @@ class UVK5Remote {
             if (result.success) {
                 console.log(`Switched to ${result.label}`);
                 this.refreshPorts();
+                // Apply saved settings for this radio type
+                if (result.settings) {
+                    if (result.settings.port) {
+                        this.els.portSelect.value = result.settings.port;
+                    }
+                    if (result.settings.audio_playback && this.els.audioPlayback) {
+                        this.els.audioPlayback.value = result.settings.audio_playback;
+                    }
+                    if (result.settings.audio_capture && this.els.audioCapture) {
+                        this.els.audioCapture.value = result.settings.audio_capture;
+                    }
+                }
             }
         } catch (err) {
             console.error('Set radio type error:', err);
