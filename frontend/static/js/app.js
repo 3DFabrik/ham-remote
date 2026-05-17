@@ -682,9 +682,11 @@ class UVK5Remote {
         this._rxWritePos = 0;
         this._rxReadPos = 0;
         this._rxBufSamples = 0;
+        this._rxPlaying = false;
+        this._rxPreBufferTarget = 4800; // Pre-buffer 300ms before starting playback
         
         // ScriptProcessor reads from ring buffer continuously
-        const processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+        const processor = this.audioContext.createScriptProcessor(1024, 1, 1);
         
         // Create RX analyser
         this.rxAnalyser = this.audioContext.createAnalyser();
@@ -696,16 +698,36 @@ class UVK5Remote {
             const output = e.outputBuffer.getChannelData(0);
             const len = output.length;
             
+            // Don't play until pre-buffer is full enough
+            if (!this._rxPlaying) {
+                if (this._rxBufSamples < this._rxPreBufferTarget) {
+                    for (let i = 0; i < len; i++) output[i] = 0;
+                    return;
+                }
+                this._rxPlaying = true;
+            }
+            
             if (this._rxBufSamples >= len) {
-                // Read from ring buffer
+                // Continuous drift correction: skip/duplicate 1 sample based on buffer level
+                // Target ~2400 samples (150ms buffer), adjust if drifting
+                const targetBuf = 2400;
+                const drift = this._rxBufSamples - targetBuf;
+                
                 for (let i = 0; i < len; i++) {
                     output[i] = this._rxRingBuf[this._rxReadPos];
                     this._rxReadPos = (this._rxReadPos + 1) % this._rxRingBuf.length;
                 }
                 this._rxBufSamples -= len;
+                
+                // Skip 1 sample if buffer is too large, to slowly catch up
+                if (drift > 800 && this._rxBufSamples > 0) {
+                    this._rxReadPos = (this._rxReadPos + 1) % this._rxRingBuf.length;
+                    this._rxBufSamples -= 1;
+                }
             } else {
-                // Not enough data - output silence
+                // Buffer underrun - output silence and reset playing state
                 for (let i = 0; i < len; i++) output[i] = 0;
+                this._rxPlaying = false;
             }
         };
         
@@ -727,14 +749,6 @@ class UVK5Remote {
             this._rxWritePos = (this._rxWritePos + 1) % this._rxRingBuf.length;
         }
         this._rxBufSamples += float32Array.length;
-        
-        // Gradual drift correction: if buffer > 0.5s, consume slightly faster
-        // This avoids the hard skip that causes the 7-second dropout
-        if (this._rxBufSamples > 8000) {
-            // Skip just 1 sample per frame to gradually catch up
-            this._rxReadPos = (this._rxReadPos + 1) % this._rxRingBuf.length;
-            this._rxBufSamples -= 1;
-        }
     }
     
     // ============================================================

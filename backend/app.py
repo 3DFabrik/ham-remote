@@ -1198,17 +1198,20 @@ class AudioStreamManager:
                     )
                     
                     while self._running and self._capture_process.poll() is None:
-                        chunk = self._capture_process.stdout.read(self.FRAME_BYTES)
-                        if len(chunk) >= self.FRAME_BYTES:
-                            # Encode single Opus frame (480 samples = 30ms)
-                            opus_data = self.opus_encoder.encode(chunk, self.FRAME_SIZE)
-                            encoded = base64.b64encode(opus_data).decode()
-                            for sid in list(self.rx_clients):
-                                socketio.emit('audio_tx', {
-                                    'data': encoded,
-                                    'codec': 'opus',
-                                    'sampleRate': self.SAMPLE_RATE
-                                }, room=sid)
+                        # Read 5 frames worth of PCM (5 x 20ms = 100ms) and encode each
+                        pcm_chunk = self._capture_process.stdout.read(self.FRAME_BYTES * 5)
+                        if len(pcm_chunk) >= self.FRAME_BYTES:
+                            num_frames = len(pcm_chunk) // self.FRAME_BYTES
+                            for i in range(num_frames):
+                                pcm_frame = pcm_chunk[i * self.FRAME_BYTES:(i + 1) * self.FRAME_BYTES]
+                                opus_data = self.opus_encoder.encode(pcm_frame, self.FRAME_SIZE)
+                                encoded = base64.b64encode(opus_data).decode()
+                                for sid in list(self.rx_clients):
+                                    socketio.emit('audio_tx', {
+                                        'data': encoded,
+                                        'codec': 'opus',
+                                        'sampleRate': self.SAMPLE_RATE
+                                    }, room=sid)
                     
                     if self._capture_process.poll() is not None:
                         # Force-kill and wait to free the audio device
