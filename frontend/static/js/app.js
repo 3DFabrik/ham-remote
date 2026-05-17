@@ -794,15 +794,15 @@ class UVK5Remote {
         const audioCapture = this.els.audioCapture?.value || '';
         
         if (this.socket) {
-            // Show connecting state immediately
-            this.updateConnectionStatus(true);
+            // Show connecting state, but don't set this.connected yet
+            this.els.statusDot.className = 'status-dot connecting';
             this.els.statusText.textContent = 'Connecting...';
             this.socket.emit('radio_connect', {
                 port,
                 audio_playback: audioPlayback,
                 audio_capture: audioCapture
             });
-            // Radio update will arrive via socket event
+            // Radio update will set this.connected and auto-start RX
         } else {
             // Fallback to HTTP
             try {
