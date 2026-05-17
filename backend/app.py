@@ -567,18 +567,25 @@ class XieguX6100Radio(UVK5Radio):
             return False
     
     def set_frequency(self, freq_mhz):
-        """Set frequency, immediately read back and push to frontend."""
+        """Set frequency, read back and push to frontend."""
         freq_hz = int(freq_mhz * 1_000_000)
         bcd = self._freq_to_civ_bcd(freq_hz)
         self._freq_set_at = time.time()  # suppress monitor
-        # Set command (no response expected)
+        # Optimistically update
+        self.current_freq = freq_mhz
+        socketio.emit('radio_update', self.get_status())
+        # Send set command
         self._send_civ(self.CMD_FREQ_SET, data=bcd, expect_response=False)
-        # Wait for radio to process
+        # Read back after brief pause
         time.sleep(0.3)
-        # Read back confirmed frequency
         confirmed = self.get_frequency()
-        if confirmed:
+        if confirmed and abs(confirmed - freq_mhz) < 0.001:
+            # Radio confirmed - push again to be safe
             socketio.emit('radio_update', self.get_status())
+        elif confirmed:
+            # Radio returned different freq - trust the radio
+            socketio.emit('radio_update', self.get_status())
+        # If confirmed is None (read failed), keep optimistic value
     
     def _freq_to_civ_bcd(self, freq_hz):
         """Convert Hz to CI-V BCD (5 bytes, MSB first per X6100 manual Table 2-1).
