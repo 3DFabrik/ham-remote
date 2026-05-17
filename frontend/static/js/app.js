@@ -639,8 +639,10 @@ class UVK5Remote {
                 }
                 
                 if (this.opusDecoder) {
-                    this.opusDecoder.decodeFrame(bytes).then(pcm => {
-                        this._playAndAnalyzeRx(pcm);
+                    this.opusDecoder.decodeFrame(bytes).then(result => {
+                        // opus-decoder returns { channelData: [Float32Array], samplesDecoded, sampleRate }
+                        const audio = result.channelData ? result.channelData[0] : result;
+                        this._playAndAnalyzeRx(audio);
                     });
                     return;
                 }
@@ -787,10 +789,13 @@ class UVK5Remote {
     
     async _initOpusDecoder() {
         try {
-            if (typeof OpusDecoder !== 'undefined') {
-                this.opusDecoder = new OpusDecoder();
+            // opus-decoder UMD exports to window["opus-decoder"].OpusDecoder
+            const OpusDecoderClass = (window['opus-decoder'] && window['opus-decoder'].OpusDecoder)
+                || (typeof OpusDecoder !== 'undefined' ? OpusDecoder : null);
+            if (OpusDecoderClass) {
+                this.opusDecoder = new OpusDecoderClass({ sampleRate: 16000, channels: 1 });
                 await this.opusDecoder.ready;
-                console.log('Opus decoder initialized');
+                console.log('Opus decoder initialized (16kHz mono)');
             } else {
                 console.warn('Opus decoder library not loaded, RX will use PCM fallback');
             }
