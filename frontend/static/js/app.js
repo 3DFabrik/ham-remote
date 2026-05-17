@@ -14,6 +14,7 @@ class UVK5Remote {
         this.txPower = 'LOW';
         this.simulate = false;
         this._rxStarted = false;
+        this._wantRx = false;
         this._freqSetAt = null;
         this.audioContext = null;
         this.mediaStream = null;
@@ -70,13 +71,14 @@ class UVK5Remote {
         
         this.socket.on('radio_update', (data) => {
             this.updateFromRadio(data);
-            // Always ensure RX is running when radio is connected
-            if (data.connected && !this._rxStarted) {
+            // Only manage RX based on user intent, not background pushes
+            if (data.connected && this._wantRx && !this._rxStarted) {
                 this.startRxAudio();
             }
-            // Stop RX when radio disconnects
+            // Always stop RX if radio disconnects
             if (!data.connected && this._rxStarted) {
                 this.stopRxAudio();
+                this._wantRx = false;
             }
         });
         
@@ -806,6 +808,7 @@ class UVK5Remote {
             // Show connecting state, but don't set this.connected yet
             this.els.statusDot.className = 'status-dot connecting';
             this.els.statusText.textContent = 'Connecting...';
+            this._wantRx = true;  // User wants RX after connect
             this.socket.emit('radio_connect', {
                 port,
                 audio_playback: audioPlayback,
@@ -831,6 +834,7 @@ class UVK5Remote {
     
     async startRxAudio() {
         if (this._rxStarted) return;
+        this._rxStarted = true;  // Set immediately to prevent race
         try {
             const resp = await fetch('/api/audio/rx/start', {
                 method: 'POST',
@@ -838,9 +842,9 @@ class UVK5Remote {
                 body: JSON.stringify({ clientId: this.socket?.id || 'browser' })
             });
             const data = await resp.json();
-            this._rxStarted = true;
             console.log('RX audio:', data.message);
         } catch (err) {
+            this._rxStarted = false;  // Reset on failure
             console.error('RX audio start error:', err);
         }
     }
@@ -860,6 +864,7 @@ class UVK5Remote {
     }
     
     async disconnectRadio() {
+        this._wantRx = false;  // User doesn't want RX
         try {
             await this.stopRxAudio();
             if (this.socket) {
