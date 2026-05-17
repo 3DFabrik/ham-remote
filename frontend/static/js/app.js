@@ -13,6 +13,8 @@ class UVK5Remote {
         this.volume = 5;
         this.txPower = 'LOW';
         this.simulate = false;
+        this._rxStarted = false;
+        this._freqSetAt = null;
         this.audioContext = null;
         this.mediaStream = null;
         this.audioProcessor = null;
@@ -67,11 +69,14 @@ class UVK5Remote {
         });
         
         this.socket.on('radio_update', (data) => {
-            const wasDisconnected = !this.connected;
             this.updateFromRadio(data);
-            // Auto-start RX audio when radio just connected
-            if (data.connected && wasDisconnected) {
+            // Always ensure RX is running when radio is connected
+            if (data.connected && !this._rxStarted) {
                 this.startRxAudio();
+            }
+            // Stop RX when radio disconnects
+            if (!data.connected && this._rxStarted) {
+                this.stopRxAudio();
             }
         });
         
@@ -528,7 +533,11 @@ class UVK5Remote {
             this.mediaRecorder = null;
         }
         
-        this.startRxAudio();
+        // Restart RX after PTT release if still connected
+        if (this.connected) {
+            this._rxStarted = false;  // force restart
+            this.startRxAudio();
+        }
     }
     
     // ============================================================
@@ -821,6 +830,7 @@ class UVK5Remote {
     }
     
     async startRxAudio() {
+        if (this._rxStarted) return;
         try {
             const resp = await fetch('/api/audio/rx/start', {
                 method: 'POST',
@@ -828,6 +838,7 @@ class UVK5Remote {
                 body: JSON.stringify({ clientId: this.socket?.id || 'browser' })
             });
             const data = await resp.json();
+            this._rxStarted = true;
             console.log('RX audio:', data.message);
         } catch (err) {
             console.error('RX audio start error:', err);
@@ -835,12 +846,14 @@ class UVK5Remote {
     }
     
     async stopRxAudio() {
+        if (!this._rxStarted) return;
         try {
             await fetch('/api/audio/rx/stop', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ clientId: this.socket?.id || 'browser' })
             });
+            this._rxStarted = false;
         } catch (err) {
             console.error('RX audio stop error:', err);
         }
