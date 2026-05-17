@@ -83,8 +83,10 @@ class UVK5Remote {
         });
         
         this.socket.on('audio_tx', (data) => {
-            // Incoming audio from radio RX
-            if (data.data) {
+            // Binary frame (ArrayBuffer) or legacy JSON
+            if (data instanceof ArrayBuffer) {
+                this._playBinaryPCM(data);
+            } else if (data && data.data) {
                 this.processRxAudio(data);
             }
         });
@@ -603,6 +605,21 @@ class UVK5Remote {
     // ============================================================
     // Audio (Microphone TX + Speaker RX with Level Analysis)
     // ============================================================
+    
+    _playBinaryPCM(buffer) {
+        // Fast path: ArrayBuffer from binary WebSocket → Int16 → Float32 → play
+        if (!this.audioContext) {
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 16000
+            });
+        }
+        const int16 = new Int16Array(buffer);
+        const float32 = new Float32Array(int16.length);
+        for (let i = 0; i < int16.length; i++) {
+            float32[i] = int16[i] / 0x8000;
+        }
+        this._playAndAnalyzeRx(float32);
+    }
     
     processRxAudio(data) {
         if (!this.audioContext) {

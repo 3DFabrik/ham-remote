@@ -1092,6 +1092,9 @@ class AudioStreamManager:
     CHANNELS = 1
     FRAME_SIZE = 480  # 30ms @ 16kHz = 480 samples
     FRAME_BYTES = 960  # 480 samples * 2 bytes (16-bit)
+    # Send larger chunks to reduce WebSocket overhead
+    CHUNK_FRAMES = 4  # 4 frames = 120ms per chunk
+    CHUNK_BYTES = FRAME_BYTES * 4  # 3840 bytes per chunk
     
     def __init__(self):
         self.tx_active = False
@@ -1195,9 +1198,9 @@ class AudioStreamManager:
                     )
                     
                     while self._running and self._capture_process.poll() is None:
-                        chunk = self._capture_process.stdout.read(self.FRAME_BYTES)
-                        if len(chunk) == self.FRAME_BYTES:
-                            # Send as raw PCM (base64 encoded) for maximum compatibility
+                        chunk = self._capture_process.stdout.read(self.CHUNK_BYTES)
+                        if len(chunk) >= self.FRAME_BYTES:
+                            # Send as base64 PCM in larger chunks
                             encoded = base64.b64encode(chunk).decode()
                             for sid in list(self.rx_clients):
                                 socketio.emit('audio_tx', {
