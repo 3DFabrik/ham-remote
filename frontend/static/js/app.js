@@ -16,6 +16,7 @@ class UVK5Remote {
         this.simulate = false;
         this._rxStarted = false;
         this._wantRx = false;
+        this._userInitiatedConnect = false;
         this._freqSetAt = null;
         this.audioContext = null;
         this.mediaStream = null;
@@ -62,7 +63,10 @@ class UVK5Remote {
         
         this.socket.on('connect', () => {
             console.log('WebSocket connected, id:', this.socket.id);
-            this.updateConnectionStatus(true);
+            // Don't flip UI to connected on page load - user must click Connect
+            if (this._userInitiatedConnect) {
+                this.updateConnectionStatus(true);
+            }
         });
         
         this.socket.on('disconnect', () => {
@@ -245,10 +249,18 @@ class UVK5Remote {
         }
         
         // Clipping
+        const timeoutKey = channel + 'ClipTimeout';
         if (linearPeak > 0.89) {
             clipEl.classList.add('clipping');
             dbEl.classList.add('clip-warn');
             dbEl.textContent = 'CLIP!';
+            // Reset any existing timeout
+            if (this[timeoutKey]) clearTimeout(this[timeoutKey]);
+            // Auto-clear after 2 seconds
+            this[timeoutKey] = setTimeout(() => {
+                clipEl.classList.remove('clipping');
+                dbEl.classList.remove('clip-warn');
+            }, 2000);
         }
     }
     
@@ -786,6 +798,32 @@ class UVK5Remote {
         this.els.btnRefreshPorts.addEventListener('click', () => this.refreshPorts());
         this.els.btnConnect.addEventListener('click', () => this.connectRadio());
         this.els.btnDisconnect.addEventListener('click', () => this.disconnectRadio());
+
+        // Main page connect/disconnect button
+        const btnMain = document.getElementById('btn-connect-main');
+        const radioMain = document.getElementById('radio-type-main');
+        if (btnMain) {
+            btnMain.addEventListener('click', () => {
+                if (this.connected) {
+                    this.disconnectRadio();
+                } else {
+                    // Sync radio type from main dropdown to setup dropdown
+                    if (radioMain && this.els.radioType) {
+                        this.els.radioType.value = radioMain.value;
+                    }
+                    this.connectRadio();
+                }
+            });
+        }
+        // Sync setup dropdown → main dropdown
+        if (this.els.radioType && radioMain) {
+            this.els.radioType.addEventListener('change', () => {
+                radioMain.value = this.els.radioType.value;
+            });
+            radioMain.addEventListener('change', () => {
+                this.els.radioType.value = radioMain.value;
+            });
+        }
         
         this.els.audioPlayback = document.getElementById('audio-playback');
         this.els.audioCapture = document.getElementById('audio-capture');
@@ -869,11 +907,15 @@ class UVK5Remote {
         const audioPlayback = this.els.audioPlayback?.value || '';
         const audioCapture = this.els.audioCapture?.value || '';
         
+        // Auto-enable mic on connect
+        await this._enableMic();
+        
         if (this.socket) {
             // Show connecting state, but don't set this.connected yet
             this.els.statusDot.className = 'status-dot connecting';
             this.els.statusText.textContent = 'Connecting...';
             this._wantRx = true;  // User wants RX after connect
+            this._userInitiatedConnect = true;
             this.socket.emit('radio_connect', {
                 port,
                 audio_playback: audioPlayback,
@@ -894,6 +936,32 @@ class UVK5Remote {
                     this.startRxAudio();
                 }
             } catch (err) { console.error('Connect error:', err); }
+        }
+    }
+    
+    async _enableMic() {
+        if (this._micReady) return; // Already enabled
+        try {
+            if (!this.audioContext) {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            }
+            if (this.audioContext.state === 'suspended') await this.audioContext.resume();
+            
+            this.micStream = await navigator.mediaDevices.getUserMedia({
+                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
+            });
+            
+            const micSource = this.audioContext.createMediaStreamSource(this.micStream);
+            this.txAnalyser = this.audioContext.createAnalyser();
+            this.txAnalyser.fftSize = 256;
+            this.txAnalyser.smoothingTimeConstant = 0.5;
+            this.txDataArray = new Uint8Array(this.txAnalyser.frequencyBinCount);
+            micSource.connect(this.txAnalyser);
+            
+            this._micReady = true;
+            this._log('[MIC] auto-enabled on connect');
+        } catch (err) {
+            this._log('[MIC] FAILED: ' + err.message);
         }
     }
     
@@ -930,6 +998,14 @@ class UVK5Remote {
     
     async disconnectRadio() {
         this._wantRx = false;  // User doesn't want RX
+        this._userInitiatedConnect = false;
+        // Disable mic
+        if (this.micStream) {
+            this.micStream.getTracks().forEach(t => t.stop());
+            this.micStream = null;
+            this._micReady = false;
+            this._log('[MIC] disabled on disconnect');
+        }
         try {
             await this.stopRxAudio();
             if (this.socket) {
@@ -951,6 +1027,13 @@ class UVK5Remote {
         this.connected = connected;
         this.els.statusDot.className = 'status-dot ' + (connected ? 'connected' : 'disconnected');
         this.els.statusText.textContent = connected ? 'Online' : 'Offline';
+
+        // Update main page button
+        const btnMain = document.getElementById('btn-connect-main');
+        if (btnMain) {
+            btnMain.textContent = connected ? 'Disconnect' : 'Connect';
+            btnMain.className = 'btn-connect-main ' + (connected ? 'connected' : 'connect');
+        }
     }
     
     updateFromRadio(data) {
@@ -1184,6 +1267,13 @@ class UVK5Remote {
 
 // Initialize on load
 document.addEventListener('DOMContentLoaded', () => {
+    // Set initial button state
+    const btnMain = document.getElementById('btn-connect-main');
+    if (btnMain) {
+        btnMain.textContent = 'Connect';
+        btnMain.className = 'btn-connect-main connect';
+    }
+
     window.hamRemote = new UVK5Remote();
     
     // Restore saved settings
@@ -1196,6 +1286,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (settings.radio_type) {
             const rt = document.getElementById('radio-type');
             if (rt) rt.value = settings.radio_type;
+            const rtMain = document.getElementById('radio-type-main');
+            if (rtMain) rtMain.value = settings.radio_type;
         }
     }).catch(() => {});
 });

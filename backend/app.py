@@ -665,9 +665,11 @@ class UVK5Radio:
         return True
     
     def set_volume(self, level):
-        """Set volume level (0-15)."""
+        """Set RX audio gain (0-15 maps to 0.0 - 1.5 gain multiplier)."""
         self.volume = max(0, min(15, level))
-        logger.info(f"Volume set to {self.volume}")
+        # Map 0-15 to gain 0.0 - 1.5
+        self.rx_gain = self.volume / 10.0
+        logger.info(f"Volume set to {self.volume} (gain={self.rx_gain:.2f})")
         return True
     
     def set_tx_power(self, power):
@@ -1461,11 +1463,13 @@ def api_squelch():
 
 @app.route('/api/volume', methods=['POST'])
 def api_volume():
-    """Set volume level."""
+    """Set volume / RX gain level."""
     data = request.json or {}
     level = data.get('level', 5)
     success = radio.set_volume(int(level))
-    return jsonify({'success': success, 'volume': radio.volume})
+    # Apply gain to audio stream manager
+    audio_stream_manager.rx_gain = radio.rx_gain
+    return jsonify({'success': success, 'volume': radio.volume, 'gain': round(radio.rx_gain, 2)})
 
 
 @app.route('/api/power', methods=['POST'])
@@ -1632,6 +1636,7 @@ class AudioStreamManager:
         self._capture_process = None
         self._capture_thread = None
         self._running = False
+        self.rx_gain = 1.0  # RX audio gain multiplier (0.0 - 2.0, default 1.0)
         
         # Opus encoder for RX (radio → browser)
         import opuslib

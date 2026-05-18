@@ -55,6 +55,16 @@
             </div>
         </section>
 
+        <!-- Radio Connect Bar -->
+        <div class="radio-connect-bar">
+            <select id="radio-type-main">
+                <option value="uvk5">Quansheng UV-K5</option>
+                <option value="yaesu-ft">Yaesu FT-7800/8300</option>
+                <option value="xiegu-x6100">Xiegu X6100</option>
+            </select>
+            <button class="btn-connect-main" id="btn-connect-main">Connect</button>
+        </div>
+
         <!-- Tabs -->
         <nav class="tabs">
             <button class="tab active" data-tab="main">📻 Main</button>
@@ -123,7 +133,7 @@
                     <span class="ptt-label">PTT</span>
                     <span class="ptt-hint">Hold to talk</span>
                 </button>
-                <div class="mic-enable-bar">
+                <div class="mic-enable-bar" style="display:none">
                     <button class="btn-mic-toggle" id="btn-mic-enable">🎤 Enable Mic</button>
                     <span class="mic-status" id="mic-enable-status"></span>
                 </div>
