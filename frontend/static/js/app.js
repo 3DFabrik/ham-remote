@@ -155,15 +155,21 @@ class UVK5Remote {
     
     _levelMeterLoop() {
         // Update TX level (from mic analyser)
+        // Only show TX level while PTT is active
         if (this.txAnalyser && this.txDataArray) {
-            this.txAnalyser.getByteTimeDomainData(this.txDataArray);
-            const peak = this._getPeakFromData(this.txDataArray);
-            const db = this._amplitudeToDb(peak);
-            this._updateBar('tx', db, peak);
-            // Log first significant TX reading
-            if (db > -50 && !this._txLoggedOnce) {
-                this._log('[TX-METER] First reading: ' + db.toFixed(1) + ' dB, peak=' + peak.toFixed(3));
-                this._txLoggedOnce = true;
+            if (this.pttActive) {
+                this.txAnalyser.getByteTimeDomainData(this.txDataArray);
+                const peak = this._getPeakFromData(this.txDataArray);
+                const db = this._amplitudeToDb(peak);
+                this._updateBar('tx', db, peak);
+                // Log first significant TX reading
+                if (db > -50 && !this._txLoggedOnce) {
+                    this._log('[TX-METER] First reading: ' + db.toFixed(1) + ' dB, peak=' + peak.toFixed(3));
+                    this._txLoggedOnce = true;
+                }
+            } else {
+                // PTT off: force TX bar to zero
+                this._updateBar('tx', -Infinity, 0);
             }
         }
         
@@ -201,8 +207,18 @@ class UVK5Remote {
         
         if (!maskEl) return;
         
-        // Map dB to percentage: -60dB = 0%, 0dB = 100%
-        const pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+        // Map dB to percentage
+        // TX: professional level meter -20dB to +4dB (0dB at ~83%)
+        // RX/SMeter: -60dB to 0dB (original mapping)
+        let pct;
+        if (channel === 'tx') {
+            const floor = -20;
+            const ceil = 4;
+            const range = ceil - floor; // 24 dB range
+            pct = Math.max(0, Math.min(100, ((db - floor) / range) * 100));
+        } else {
+            pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+        }
         
         // Mask covers (100 - pct)% from the right, revealing the gradient underneath
         maskEl.style.width = (100 - pct) + '%';
