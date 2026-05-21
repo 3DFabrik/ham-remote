@@ -1309,6 +1309,7 @@ def api_get_settings():
 # Active audio devices
 audio_playback_dev = os.environ.get('AUDIO_PLAYBACK', None)
 audio_capture_dev = os.environ.get('AUDIO_CAPTURE', None)
+audio_codec = 'opus'  # 'opus' or 'pcm'
 
 # Restore audio settings from per-radio config
 _saved = _load_radio_settings(current_radio_type)
@@ -1565,13 +1566,14 @@ def api_audio_devices():
 
 @app.route('/api/audio/config', methods=['GET', 'POST'])
 def api_audio_config():
-    """Get or set the active audio devices."""
-    global audio_playback_dev, audio_capture_dev
+    """Get or set the active audio devices and codec."""
+    global audio_playback_dev, audio_capture_dev, audio_codec
 
     if request.method == 'GET':
         return jsonify({
             'playback': audio_playback_dev,
-            'capture': audio_capture_dev
+            'capture': audio_capture_dev,
+            'codec': audio_codec
         })
 
     data = request.json or {}
@@ -1579,12 +1581,15 @@ def api_audio_config():
         audio_playback_dev = data['playback']
     if 'capture' in data:
         audio_capture_dev = data['capture']
+    if 'codec' in data and data['codec'] in ('opus', 'pcm', 'g711'):
+        audio_codec = data['codec']
 
-    logger.info(f"Audio config: playback={audio_playback_dev}, capture={audio_capture_dev}")
+    logger.info(f"Audio config: playback={audio_playback_dev}, capture={audio_capture_dev}, codec={audio_codec}")
     return jsonify({
         'success': True,
         'playback': audio_playback_dev,
-        'capture': audio_capture_dev
+        'capture': audio_capture_dev,
+        'codec': audio_codec
     })
 
 
@@ -1619,12 +1624,14 @@ def api_audio_rx_stop():
 
 class AudioStreamManager:
     """Manages bidirectional audio streaming between browser and sound card.
-    Uses Opus codec: 8kHz mono, ~12 kbit/s, 20ms frames."""
+    Uses Opus codec: 16kHz mono, 20ms frames. Also supports PCM and G.711 µ-law."""
     
-    SAMPLE_RATE = 8000
+    _ULAW_DECODE_TABLE = None  # Not needed, using audioop
+    
+    SAMPLE_RATE = 16000
     CHANNELS = 1
-    FRAME_SIZE = 160  # 20ms @ 8kHz = 160 samples (Opus only supports 2.5/5/10/20/40/60ms)
-    FRAME_BYTES = 320  # 160 samples * 2 bytes (16-bit)
+    FRAME_SIZE = 320  # 20ms @ 16kHz = 320 samples (Opus only supports 2.5/5/10/20/40/60ms)
+    FRAME_BYTES = 640  # 320 samples * 2 bytes (16-bit)
     # Send larger chunks to reduce WebSocket overhead
     CHUNK_FRAMES = 4  # 4 frames = 80ms per chunk
     CHUNK_BYTES = FRAME_BYTES * 4  # 1280 bytes per chunk
@@ -1642,7 +1649,8 @@ class AudioStreamManager:
         import opuslib
         self.opus_encoder = opuslib.Encoder(self.SAMPLE_RATE, self.CHANNELS, opuslib.APPLICATION_VOIP)
         self.opus_decoder = opuslib.Decoder(self.SAMPLE_RATE, self.CHANNELS)
-        logger.info("Audio: Opus codec initialized (16kHz mono, VOIP mode)")
+        
+        logger.info("Audio: Opus + G.711 µ-law codec initialized (16kHz mono)")
     
     def start_tx(self):
         """Start TX: prepare to receive mic audio from browser."""
@@ -1653,6 +1661,13 @@ class AudioStreamManager:
         """Stop TX."""
         self.tx_active = False
         logger.info("Audio TX stopped")
+    
+    # G.711 µ-law - using Python's audioop (standard library)
+    
+    def _pcm_to_ulaw(self, pcm_data):
+        """Convert PCM Int16 bytes to G.711 µ-law bytes using audioop."""
+        import audioop
+        return audioop.lin2ulaw(pcm_data, 2)  # 2 bytes per sample
     
     def handle_tx_audio(self, data):
         """Handle incoming Opus audio from browser, decode and play to sound card."""
@@ -1732,20 +1747,41 @@ class AudioStreamManager:
                     )
                     
                     while self._running and self._capture_process.poll() is None:
-                        # Read 5 frames worth of PCM (5 x 20ms = 100ms) and encode each
+                        # Read 5 frames worth of PCM (5 x 20ms = 100ms)
                         pcm_chunk = self._capture_process.stdout.read(self.FRAME_BYTES * 5)
                         if len(pcm_chunk) >= self.FRAME_BYTES:
-                            num_frames = len(pcm_chunk) // self.FRAME_BYTES
-                            for i in range(num_frames):
-                                pcm_frame = pcm_chunk[i * self.FRAME_BYTES:(i + 1) * self.FRAME_BYTES]
-                                opus_data = self.opus_encoder.encode(pcm_frame, self.FRAME_SIZE)
-                                encoded = base64.b64encode(opus_data).decode()
+                            if audio_codec == 'pcm':
+                                # PCM mode: send raw audio as base64
+                                encoded = base64.b64encode(pcm_chunk).decode()
                                 for sid in list(self.rx_clients):
                                     socketio.emit('audio_tx', {
                                         'data': encoded,
-                                        'codec': 'opus',
+                                        'codec': 'pcm',
                                         'sampleRate': self.SAMPLE_RATE
                                     }, room=sid)
+                            elif audio_codec == 'g711':
+                                # G.711 µ-law: compress 16-bit to 8-bit (50% bandwidth)
+                                ulaw_data = self._pcm_to_ulaw(pcm_chunk)
+                                encoded = base64.b64encode(ulaw_data).decode()
+                                for sid in list(self.rx_clients):
+                                    socketio.emit('audio_tx', {
+                                        'data': encoded,
+                                        'codec': 'g711',
+                                        'sampleRate': self.SAMPLE_RATE
+                                    }, room=sid)
+                            else:
+                                # Opus mode: encode each frame individually
+                                num_frames = len(pcm_chunk) // self.FRAME_BYTES
+                                for i in range(num_frames):
+                                    pcm_frame = pcm_chunk[i * self.FRAME_BYTES:(i + 1) * self.FRAME_BYTES]
+                                    opus_data = self.opus_encoder.encode(pcm_frame, self.FRAME_SIZE)
+                                    encoded = base64.b64encode(opus_data).decode()
+                                    for sid in list(self.rx_clients):
+                                        socketio.emit('audio_tx', {
+                                            'data': encoded,
+                                            'codec': 'opus',
+                                            'sampleRate': self.SAMPLE_RATE
+                                        }, room=sid)
                     
                     if self._capture_process.poll() is not None:
                         # Force-kill and wait to free the audio device
@@ -1935,10 +1971,10 @@ def _test_tone_loop():
     import math
     import base64
     
-    SAMPLE_RATE = 8000
+    SAMPLE_RATE = 16000
     FREQ = 440  # 440 Hz (Kammerton A)
     FRAME_MS = 20  # 20ms per frame
-    FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000  # 160 samples
+    FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000  # 320 samples @ 16kHz
     AMPLITUDE = 16000  # ~50% of Int16 max to avoid clipping
     
     # Pre-generate one full period of the sine wave as lookup table

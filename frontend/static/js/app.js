@@ -515,7 +515,7 @@ class UVK5Remote {
                     micStatus.style.color = '#ffaa00';
                     
                     if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
                     }
                     if (this.audioContext.state === 'suspended') await this.audioContext.resume();
                     
@@ -604,7 +604,7 @@ class UVK5Remote {
                         this.socket.emit('audio_rx', {
                             data: reader.result.split(',')[1],
                             codec: 'opus-webm',
-                            sampleRate: 8000
+                            sampleRate: 16000
                         });
                     };
                     reader.readAsDataURL(e.data);
@@ -733,7 +733,7 @@ class UVK5Remote {
         // Fast path: ArrayBuffer from binary WebSocket → Int16 → Float32 → play
         if (!this.audioContext) {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 8000
+                sampleRate: 16000
             });
         }
         const int16 = new Int16Array(buffer);
@@ -744,10 +744,33 @@ class UVK5Remote {
         this._playAndAnalyzeRx(float32);
     }
     
+    // G.711 µ-law standard decode table (ITU-T G.711)
+    static _ULAW_DECODE = null;
+    
+    static _buildUlawTable() {
+        // Standard ITU-T µ-law decode: 256-entry lookup
+        const table = new Int16Array(256);
+        const BIAS = 0x84; // 132
+        for (let i = 0; i < 256; i++) {
+            let ulaw = (~i) & 0xFF;
+            let sign = ulaw & 0x80 ? -1 : 1;
+            let segment = (ulaw >> 4) & 0x07;
+            let mantissa = ulaw & 0x0F;
+            let value = ((0x10 | mantissa) << (segment + 2)) - BIAS;
+            table[i] = value * sign;
+        }
+        return table;
+    }
+    
+    static _ulawDecode(byte) {
+        if (!UVK5Remote._ULAW_DECODE) UVK5Remote._ULAW_DECODE = UVK5Remote._buildUlawTable();
+        return UVK5Remote._ULAW_DECODE[byte];
+    }
+
     processRxAudio(data) {
         if (!this.audioContext) {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 8000
+                sampleRate: 16000
             });
         }
         
@@ -781,6 +804,18 @@ class UVK5Remote {
                     float32[i] = int16[i] / 0x8000;
                 }
                 float32Array = float32;
+            } else if (data.codec === 'g711') {
+                // G.711 µ-law: 8-bit → 16-bit linear → float32
+                const binary = atob(data.data);
+                const ulawBytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) {
+                    ulawBytes[i] = binary.charCodeAt(i);
+                }
+                const float32 = new Float32Array(ulawBytes.length);
+                for (let i = 0; i < ulawBytes.length; i++) {
+                    float32[i] = UVK5Remote._ulawDecode(ulawBytes[i]) / 0x8000;
+                }
+                float32Array = float32;
             }
             
             if (float32Array) {
@@ -794,14 +829,14 @@ class UVK5Remote {
     _initAudioPipeline() {
         if (!this.audioContext) {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 8000
+                sampleRate: 16000
             });
         }
         
         // Scheduled playback: each chunk is scheduled at a precise future time
         // No ring buffer, no ScriptProcessor – gap-free by design
         this._rxNextTime = 0;  // When the next chunk should start playing
-        this._rxSampleRate = 8000;
+        this._rxSampleRate = 16000;
         
         // RX analyser for level meter
         this.rxAnalyser = this.audioContext.createAnalyser();
@@ -858,7 +893,7 @@ class UVK5Remote {
         const startTone = (codec, btn) => {
             // Need user gesture to start AudioContext
             if (!this.audioContext) {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
             }
             if (this.audioContext.state === 'suspended') {
                 this.audioContext.resume();
@@ -937,11 +972,13 @@ class UVK5Remote {
         
         this.els.audioPlayback = document.getElementById('audio-playback');
         this.els.audioCapture = document.getElementById('audio-capture');
+        this.els.audioCodec = document.getElementById('audio-codec');
         this.els.btnRefreshAudio = document.getElementById('btn-refresh-audio');
         
         this.els.btnRefreshAudio.addEventListener('click', () => this.refreshAudioDevices());
         this.els.audioPlayback.addEventListener('change', () => this.setAudioConfig());
         this.els.audioCapture.addEventListener('change', () => this.setAudioConfig());
+        if (this.els.audioCodec) this.els.audioCodec.addEventListener('change', () => this.setAudioConfig());
         
         this.els.radioTypeSelect.addEventListener('change', () => this.setRadioType());
         
@@ -984,7 +1021,7 @@ class UVK5Remote {
             const OpusDecoderClass = (window['opus-decoder'] && window['opus-decoder'].OpusDecoder)
                 || (typeof OpusDecoder !== 'undefined' ? OpusDecoder : null);
             if (OpusDecoderClass) {
-                this.opusDecoder = new OpusDecoderClass({ sampleRate: 8000, channels: 1 });
+                this.opusDecoder = new OpusDecoderClass({ sampleRate: 16000, channels: 1 });
                 await this.opusDecoder.ready;
                 console.log('Opus decoder initialized (8kHz mono)');
             } else {
@@ -1053,7 +1090,7 @@ class UVK5Remote {
         if (this._micReady) return; // Already enabled
         try {
             if (!this.audioContext) {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
             }
             if (this.audioContext.state === 'suspended') await this.audioContext.resume();
             
@@ -1240,6 +1277,7 @@ class UVK5Remote {
             const config = await configResp.json();
             if (config.playback) this.els.audioPlayback.value = config.playback;
             if (config.capture) this.els.audioCapture.value = config.capture;
+            if (config.codec && this.els.audioCodec) this.els.audioCodec.value = config.codec;
             
         } catch (err) {
             console.error('Audio devices error:', err);
@@ -1249,12 +1287,13 @@ class UVK5Remote {
     async setAudioConfig() {
         const playback = this.els.audioPlayback.value;
         const capture = this.els.audioCapture.value;
+        const codec = this.els.audioCodec?.value || 'opus';
         
         try {
             await fetch('/api/audio/config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ playback, capture })
+                body: JSON.stringify({ playback, capture, codec })
             });
             console.log('Audio config saved');
         } catch (err) {
