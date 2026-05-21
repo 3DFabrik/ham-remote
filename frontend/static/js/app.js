@@ -149,8 +149,75 @@ class UVK5Remote {
         // Mic is only activated on PTT press (user gesture)
         // TX level bar shows activity only while transmitting
         
+        // Draw pixel-perfect scale lines via DOM
+        this._drawScaleLines();
+        window.addEventListener('resize', () => this._drawScaleLines());
+        
         // Start the level meter animation loop
         this._levelMeterLoop();
+    }
+    
+    _drawScaleLines() {
+        // Audio scale: -50 dB to +4 dB (54 dB range)
+        // Marks at: -40, -30, -20, -10, 0 (red), +2
+        const FLOOR = -50;
+        const CEIL = 4;
+        const RANGE = CEIL - FLOOR;
+        const AUDIO_MARKS = [
+            { db: -40, cls: '' },
+            { db: -30, cls: '' },
+            { db: -20, cls: '' },
+            { db: -10, cls: '' },
+            { db: 0,   cls: 'zero-db' },
+            { db: +2,  cls: '' },
+        ];
+        
+        // S-meter scale: -60 dB to 0 dB
+        // Marks at: S3(19.7%), S5(39.7%), S7(59.7%), S9(79.7%)
+        const RF_MARKS = [
+            { pct: 0.197 },
+            { pct: 0.397 },
+            { pct: 0.597 },
+            { pct: 0.797 },
+        ];
+        
+        const audioTracks = ['rx-track', 'tx-track'];
+        const rfTrack = document.getElementById('rf-track');
+        
+        // Draw audio scale lines for RX and TX
+        audioTracks.forEach(trackId => {
+            const track = document.getElementById(trackId);
+            if (!track) return;
+            // Remove old scale lines
+            track.querySelectorAll('.scale-line').forEach(el => el.remove());
+            
+            const trackWidth = track.offsetWidth;
+            if (trackWidth === 0) return;
+            
+            AUDIO_MARKS.forEach(mark => {
+                const frac = (mark.db - FLOOR) / RANGE;
+                const px = Math.round(frac * trackWidth);
+                const line = document.createElement('div');
+                line.className = 'scale-line' + (mark.cls ? ' ' + mark.cls : '');
+                line.style.left = px + 'px';
+                track.appendChild(line);
+            });
+        });
+        
+        // Draw RF S-meter scale lines
+        if (rfTrack) {
+            rfTrack.querySelectorAll('.scale-line').forEach(el => el.remove());
+            const trackWidth = rfTrack.offsetWidth;
+            if (trackWidth > 0) {
+                RF_MARKS.forEach(mark => {
+                    const px = Math.round(mark.pct * trackWidth);
+                    const line = document.createElement('div');
+                    line.className = 'scale-line';
+                    line.style.left = px + 'px';
+                    rfTrack.appendChild(line);
+                });
+            }
+        }
     }
     
     _levelMeterLoop() {
@@ -208,13 +275,13 @@ class UVK5Remote {
         if (!maskEl) return;
         
         // Map dB to percentage
-        // TX: professional level meter -20dB to +4dB (0dB at ~83%)
-        // RX/SMeter: -60dB to 0dB (original mapping)
+        // TX/RX: level meter -50dB to +4dB (54 dB range)
+        // SMeter: -60dB to 0dB (original mapping)
         let pct;
-        if (channel === 'tx') {
-            const floor = -20;
+        if (channel === 'tx' || channel === 'rx') {
+            const floor = -50;
             const ceil = 4;
-            const range = ceil - floor; // 24 dB range
+            const range = ceil - floor; // 54 dB range
             pct = Math.max(0, Math.min(100, ((db - floor) / range) * 100));
         } else {
             pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
