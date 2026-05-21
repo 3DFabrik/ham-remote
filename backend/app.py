@@ -1619,15 +1619,15 @@ def api_audio_rx_stop():
 
 class AudioStreamManager:
     """Manages bidirectional audio streaming between browser and sound card.
-    Uses Opus codec: 16kHz mono, ~24 kbit/s, 20ms frames."""
+    Uses Opus codec: 8kHz mono, ~12 kbit/s, 20ms frames."""
     
-    SAMPLE_RATE = 16000
+    SAMPLE_RATE = 8000
     CHANNELS = 1
-    FRAME_SIZE = 320  # 20ms @ 16kHz = 320 samples (Opus only supports 2.5/5/10/20/40/60ms)
-    FRAME_BYTES = 640  # 320 samples * 2 bytes (16-bit)
+    FRAME_SIZE = 160  # 20ms @ 8kHz = 160 samples (Opus only supports 2.5/5/10/20/40/60ms)
+    FRAME_BYTES = 320  # 160 samples * 2 bytes (16-bit)
     # Send larger chunks to reduce WebSocket overhead
-    CHUNK_FRAMES = 4  # 4 frames = 120ms per chunk
-    CHUNK_BYTES = FRAME_BYTES * 4  # 3840 bytes per chunk
+    CHUNK_FRAMES = 4  # 4 frames = 80ms per chunk
+    CHUNK_BYTES = FRAME_BYTES * 4  # 1280 bytes per chunk
     
     def __init__(self):
         self.tx_active = False
@@ -1777,7 +1777,11 @@ class AudioStreamManager:
             self._playback_proc = None
 
 
-audio_stream_manager = AudioStreamManager()
+try:
+    audio_stream_manager = AudioStreamManager()
+except Exception as e:
+    logger.warning(f"Audio: Opus not available, audio features disabled ({e})")
+    audio_stream_manager = None
 
 
 # WebSocket events for real-time updates
@@ -1911,6 +1915,130 @@ def ws_audio_stop_rx():
 @socketio.on('disconnect')
 def ws_disconnect():
     logger.info(f"WebSocket client disconnected: {request.sid}")
+    # Stop test tone if running for this client
+    _test_tone_clients.pop(request.sid, None)
+
+
+# ============================================================
+# Test Tone Generator (for audio pipeline debugging)
+# Generates a clean 1kHz sine wave as raw PCM Int16 binary frames
+# No Opus, no base64 – pure binary WebSocket for minimal latency
+# ============================================================
+
+_test_tone_clients = {}  # sid -> {'codec': 'pcm'|'opus'}
+_test_tone_thread = None
+
+
+def _test_tone_loop():
+    """Generate 440Hz sine wave and stream via WebSocket (PCM or Opus per client)."""
+    import struct
+    import math
+    import base64
+    
+    SAMPLE_RATE = 8000
+    FREQ = 440  # 440 Hz (Kammerton A)
+    FRAME_MS = 20  # 20ms per frame
+    FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000  # 160 samples
+    AMPLITUDE = 16000  # ~50% of Int16 max to avoid clipping
+    
+    # Pre-generate one full period of the sine wave as lookup table
+    period_samples = SAMPLE_RATE  # 1 second = exact multiple of any integer-Hz frequency
+    lookup = struct.pack(f'<{period_samples}h', *[
+        int(AMPLITUDE * math.sin(2.0 * math.pi * FREQ * i / SAMPLE_RATE))
+        for i in range(period_samples)
+    ])
+    
+    # Try to init Opus encoder
+    opus_encoder = None
+    try:
+        import opuslib
+        opus_encoder = opuslib.Encoder(SAMPLE_RATE, 1, opuslib.APPLICATION_VOIP)
+        logger.info("Test tone: Opus encoder available")
+    except Exception as e:
+        logger.warning(f"Test tone: Opus not available ({e}), opus mode will fail")
+    
+    logger.info("Test tone: started (440Hz, 8kHz mono, 20ms frames, pre-computed)")
+    
+    pos = 0  # Position in lookup table (in bytes)
+    frame_bytes = FRAME_SAMPLES * 2  # 320 bytes per frame (160 samples * 2)
+    
+    # Use wall-clock timing to avoid drift
+    next_send = time.monotonic()
+    
+    while _test_tone_clients:
+        # Extract frame from pre-computed lookup (wrap around)
+        if pos + frame_bytes <= len(lookup):
+            frame_pcm = lookup[pos:pos + frame_bytes]
+            pos += frame_bytes
+        else:
+            # Wrap around
+            remaining = len(lookup) - pos
+            frame_pcm = lookup[pos:] + lookup[:frame_bytes - remaining]
+            pos = frame_bytes - remaining
+        
+        # Encode Opus frame once (if any client needs it)
+        opus_frame = None
+        opus_clients = [sid for sid, cfg in list(_test_tone_clients.items()) if cfg.get('codec') == 'opus']
+        if opus_clients and opus_encoder:
+            try:
+                opus_frame = opus_encoder.encode(frame_pcm, FRAME_SAMPLES)
+            except Exception as e:
+                logger.error(f"Test tone: Opus encode error: {e}")
+        
+        # Send to all clients in their requested format
+        for sid, cfg in list(_test_tone_clients.items()):
+            try:
+                if cfg.get('codec') == 'opus':
+                    if opus_frame:
+                        encoded = base64.b64encode(opus_frame).decode()
+                        socketio.emit('audio_tx', {
+                            'data': encoded,
+                            'codec': 'opus',
+                            'sampleRate': SAMPLE_RATE
+                        }, room=sid)
+                    elif not opus_encoder:
+                        # Fallback: tell client Opus unavailable, send PCM
+                        socketio.emit('audio_tx', frame_pcm, room=sid)
+                else:
+                    # Raw PCM binary
+                    socketio.emit('audio_tx', frame_pcm, room=sid)
+            except Exception as e:
+                logger.warning(f"Test tone: emit failed for {sid}: {e}")
+                _test_tone_clients.pop(sid, None)
+        
+        # Wall-clock sleep to maintain steady 20ms frame rate
+        next_send += FRAME_MS / 1000.0
+        sleep_time = next_send - time.monotonic()
+        if sleep_time > 0:
+            eventlet.sleep(sleep_time)
+        else:
+            # We're behind schedule - skip sleep but don't accumulate debt beyond 100ms
+            if sleep_time < -0.1:
+                next_send = time.monotonic()
+    
+    logger.info("Test tone: stopped (no clients)")
+
+
+@socketio.on('test_tone_start')
+def ws_test_tone_start(data=None):
+    """Start sending a test tone to this client."""
+    global _test_tone_thread
+    sid = request.sid
+    codec = (data or {}).get('codec', 'pcm')
+    logger.info(f"Test tone requested by {sid} (codec={codec})")
+    _test_tone_clients[sid] = {'codec': codec}
+    
+    # Start generator thread if not running
+    if _test_tone_thread is None or not _test_tone_thread:
+        _test_tone_thread = eventlet.spawn(_test_tone_loop)
+
+
+@socketio.on('test_tone_stop')
+def ws_test_tone_stop():
+    """Stop sending test tone to this client."""
+    sid = request.sid
+    _test_tone_clients.pop(sid, None)
+    logger.info(f"Test tone stopped for {sid}")
 
 
 # ============================================================

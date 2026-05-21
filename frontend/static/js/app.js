@@ -44,6 +44,7 @@ class UVK5Remote {
         this.setupPTT();
         this.setupControls();
         this.setupSettings();
+        this.setupTestTone();
         this.setupLevelMeters();
         this.connectWebSocket();
     }
@@ -514,7 +515,7 @@ class UVK5Remote {
                     micStatus.style.color = '#ffaa00';
                     
                     if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
                     }
                     if (this.audioContext.state === 'suspended') await this.audioContext.resume();
                     
@@ -603,7 +604,7 @@ class UVK5Remote {
                         this.socket.emit('audio_rx', {
                             data: reader.result.split(',')[1],
                             codec: 'opus-webm',
-                            sampleRate: 16000
+                            sampleRate: 8000
                         });
                     };
                     reader.readAsDataURL(e.data);
@@ -732,7 +733,7 @@ class UVK5Remote {
         // Fast path: ArrayBuffer from binary WebSocket → Int16 → Float32 → play
         if (!this.audioContext) {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 16000
+                sampleRate: 8000
             });
         }
         const int16 = new Int16Array(buffer);
@@ -746,7 +747,7 @@ class UVK5Remote {
     processRxAudio(data) {
         if (!this.audioContext) {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 16000
+                sampleRate: 8000
             });
         }
         
@@ -761,9 +762,7 @@ class UVK5Remote {
                 }
                 
                 if (this.opusDecoder) {
-                    // OpusDecoder.decodeFrame is synchronous (not WebWorker), returns result directly
                     const result = this.opusDecoder.decodeFrame(bytes);
-                    // result = { channelData: [Float32Array], samplesDecoded, sampleRate }
                     const audio = result.channelData ? result.channelData[0] : result;
                     if (audio && audio.length > 0) {
                         this._playAndAnalyzeRx(audio);
@@ -795,69 +794,24 @@ class UVK5Remote {
     _initAudioPipeline() {
         if (!this.audioContext) {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 16000
+                sampleRate: 8000
             });
         }
         
-        // Ring buffer for RX audio
-        this._rxRingBuf = new Float32Array(16000 * 2); // 2 seconds buffer
-        this._rxWritePos = 0;
-        this._rxReadPos = 0;
-        this._rxBufSamples = 0;
-        this._rxPlaying = false;
-        this._rxPreBufferTarget = 4800; // Pre-buffer 300ms before starting playback
+        // Scheduled playback: each chunk is scheduled at a precise future time
+        // No ring buffer, no ScriptProcessor – gap-free by design
+        this._rxNextTime = 0;  // When the next chunk should start playing
+        this._rxSampleRate = 8000;
         
-        // ScriptProcessor reads from ring buffer continuously
-        const processor = this.audioContext.createScriptProcessor(1024, 1, 1);
-        
-        // Create RX analyser
+        // RX analyser for level meter
         this.rxAnalyser = this.audioContext.createAnalyser();
         this.rxAnalyser.fftSize = 256;
         this.rxAnalyser.smoothingTimeConstant = 0.5;
         this.rxDataArray = new Uint8Array(this.rxAnalyser.frequencyBinCount);
-        
-        processor.onaudioprocess = (e) => {
-            const output = e.outputBuffer.getChannelData(0);
-            const len = output.length;
-            
-            // Don't play until pre-buffer is full enough
-            if (!this._rxPlaying) {
-                if (this._rxBufSamples < this._rxPreBufferTarget) {
-                    for (let i = 0; i < len; i++) output[i] = 0;
-                    return;
-                }
-                this._rxPlaying = true;
-            }
-            
-            if (this._rxBufSamples >= len) {
-                // Continuous drift correction: skip/duplicate 1 sample based on buffer level
-                // Target ~2400 samples (150ms buffer), adjust if drifting
-                const targetBuf = 2400;
-                const drift = this._rxBufSamples - targetBuf;
-                
-                for (let i = 0; i < len; i++) {
-                    output[i] = this._rxRingBuf[this._rxReadPos];
-                    this._rxReadPos = (this._rxReadPos + 1) % this._rxRingBuf.length;
-                }
-                this._rxBufSamples -= len;
-                
-                // Skip 1 sample if buffer is too large, to slowly catch up
-                if (drift > 800 && this._rxBufSamples > 0) {
-                    this._rxReadPos = (this._rxReadPos + 1) % this._rxRingBuf.length;
-                    this._rxBufSamples -= 1;
-                }
-            } else {
-                // Buffer underrun - output silence and reset playing state
-                for (let i = 0; i < len; i++) output[i] = 0;
-                this._rxPlaying = false;
-            }
-        };
-        
-        processor.connect(this.rxAnalyser);
         this.rxAnalyser.connect(this.audioContext.destination);
-        this._rxProcessor = processor;
+        
         this._rxPipelineReady = true;
-        console.log('RX audio pipeline initialized (ring buffer + ScriptProcessor)');
+        console.log('RX audio pipeline initialized (scheduled playback)');
     }
     
     _playAndAnalyzeRx(float32Array) {
@@ -865,12 +819,85 @@ class UVK5Remote {
             this._initAudioPipeline();
         }
         
-        // Write PCM data into ring buffer
-        for (let i = 0; i < float32Array.length; i++) {
-            this._rxRingBuf[this._rxWritePos] = float32Array[i];
-            this._rxWritePos = (this._rxWritePos + 1) % this._rxRingBuf.length;
+        const ctx = this.audioContext;
+        const now = ctx.currentTime;
+        
+        // Schedule this chunk right after the previous one ends
+        // If we've fallen behind (underrun), reset to slightly in the future
+        if (this._rxNextTime < now) {
+            // Add small latency buffer (80ms) to absorb jitter
+            this._rxNextTime = now + 0.08;
         }
-        this._rxBufSamples += float32Array.length;
+        
+        // Create AudioBuffer and fill with samples
+        const audioBuffer = ctx.createBuffer(1, float32Array.length, this._rxSampleRate);
+        audioBuffer.getChannelData(0).set(float32Array);
+        
+        // Create source node and schedule it
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(this.rxAnalyser);
+        source.start(this._rxNextTime);
+        
+        // Advance play cursor by chunk duration
+        this._rxNextTime += float32Array.length / this._rxSampleRate;
+    }
+    
+    // ============================================================
+    // Test Tone (backend → frontend audio pipeline test)
+    // ============================================================
+    
+    setupTestTone() {
+        const btnPcm = document.getElementById('btn-test-tone-pcm');
+        const btnOpus = document.getElementById('btn-test-tone-opus');
+        const status = document.getElementById('test-tone-status');
+        
+        this._testToneActive = false;
+        this._testToneCodec = null;
+        
+        const startTone = (codec, btn) => {
+            // Need user gesture to start AudioContext
+            if (!this.audioContext) {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+            }
+            if (this.audioContext.state === 'suspended') {
+                this.audioContext.resume();
+            }
+            this.socket.emit('test_tone_start', { codec });
+            this._testToneActive = true;
+            this._testToneCodec = codec;
+            btn.classList.add('active');
+            if (status) status.textContent = `440Hz, 8kHz ${codec.toUpperCase()}`;
+        };
+        
+        const stopTone = () => {
+            this.socket.emit('test_tone_stop');
+            this._testToneActive = false;
+            this._testToneCodec = null;
+            if (btnPcm) btnPcm.classList.remove('active');
+            if (btnOpus) btnOpus.classList.remove('active');
+            if (status) status.textContent = '';
+        };
+        
+        if (btnPcm) {
+            btnPcm.addEventListener('click', () => {
+                if (this._testToneActive) {
+                    stopTone();
+                    if (this._testToneCodec === 'pcm') return;
+                }
+                startTone('pcm', btnPcm);
+            });
+        }
+        
+        if (btnOpus) {
+            btnOpus.addEventListener('click', () => {
+                if (this._testToneActive) {
+                    stopTone();
+                    if (this._testToneCodec === 'opus') return;
+                }
+                startTone('opus', btnOpus);
+            });
+        }
     }
     
     // ============================================================
@@ -957,9 +984,9 @@ class UVK5Remote {
             const OpusDecoderClass = (window['opus-decoder'] && window['opus-decoder'].OpusDecoder)
                 || (typeof OpusDecoder !== 'undefined' ? OpusDecoder : null);
             if (OpusDecoderClass) {
-                this.opusDecoder = new OpusDecoderClass({ sampleRate: 16000, channels: 1 });
+                this.opusDecoder = new OpusDecoderClass({ sampleRate: 8000, channels: 1 });
                 await this.opusDecoder.ready;
-                console.log('Opus decoder initialized (16kHz mono)');
+                console.log('Opus decoder initialized (8kHz mono)');
             } else {
                 console.warn('Opus decoder library not loaded, RX will use PCM fallback');
             }
@@ -1026,7 +1053,7 @@ class UVK5Remote {
         if (this._micReady) return; // Already enabled
         try {
             if (!this.audioContext) {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
             }
             if (this.audioContext.state === 'suspended') await this.audioContext.resume();
             
