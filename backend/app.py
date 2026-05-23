@@ -454,23 +454,25 @@ class UVK5Radio:
                 while len(buf) > 0:
                     # Check for 0xB5 UI packet first
                     if buf[0] == 0xB5:
+
                         if len(buf) < 2:
                             break
                         ui_type = buf[1]
                         
                         # Type 6: status bar (fixed 5 bytes: B5 06 val1 val2 val3)
                         if ui_type == 6:
-                            if len(buf) < 5:
+                            if len(buf) < 6:
                                 break
                             val1, val2, val3 = buf[2], buf[3], buf[4]
+                            battery_raw = buf[5]  # dataLen field = battery level
                             self._ui_lines.clear()
-                            battery_v = round(val1 * 0.04, 1)
+                            battery_v = round(battery_raw * 0.04, 1)
                             char_label = chr(val3) if val3 else ''
                             self._emit_display_cmd('status_bar', {
                                 'char': char_label, 'battery_v': battery_v,
                                 'flags1': val1, 'flags2': val2
                             })
-                            buf = buf[5:]
+                            buf = buf[6:]
                             continue
                         
                         # All other UI types: B5 type val1 val2 val3 data_len data...
@@ -516,7 +518,7 @@ class UVK5Radio:
                                 logger.warning(f"UI text parse error: {e}")
                         
                         elif ui_type == 5:
-                            self._emit_display_cmd('clear_lines', {'lines': val1})
+                            self._emit_display_cmd('clear_lines', {'start': val1, 'end': val2})
                         elif ui_type == 7:
                             self._emit_display_cmd('cursor', {'row': val1, 'state': val2})
                         elif ui_type == 8:

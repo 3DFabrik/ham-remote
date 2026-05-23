@@ -1215,12 +1215,11 @@ class UVK5Remote {
             ctx.fillStyle = '#1a1a1a';
             ctx.fillRect(0, 0, LCD_W * SCALE, LCD_H * SCALE);
         } else if (cmd === 'clear_lines') {
-            const lines = data.lines || 0;
+            const startRow = data.start || 0;
+            const endRow = data.end || startRow;
             ctx.fillStyle = '#1a1a1a';
-            for (let i = 0; i < 8; i++) {
-                if (lines & (1 << i)) {
-                    ctx.fillRect(0, (i + 1) * ROW_H * SCALE, LCD_W * SCALE, ROW_H * SCALE);
-                }
+            for (let i = startRow; i <= endRow; i++) {
+                ctx.fillRect(0, (i + 1) * ROW_H * SCALE, LCD_W * SCALE, ROW_H * SCALE);
             }
         } else if (cmd === 'text') {
             const pos = unpackXY(data.x || 0, data.y || 0);
