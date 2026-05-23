@@ -93,6 +93,7 @@ class UVK5Remote {
         this._lcdCtx = null;
         
         this.socket.on('display_update', (data) => {
+            // display_update logging disabled
             this._handleDisplayCmd(data);
         });
         
@@ -1215,13 +1216,13 @@ class UVK5Remote {
             ctx.fillStyle = '#1a1a1a';
             ctx.fillRect(0, 0, LCD_W * SCALE, LCD_H * SCALE);
         } else if (cmd === 'clear_lines') {
-            const startRow = data.start || 0;
-            const endRow = data.end || startRow;
-            ctx.fillStyle = '#1a1a1a';
-            for (let i = startRow; i <= endRow; i++) {
-                ctx.fillRect(0, (i + 1) * ROW_H * SCALE, LCD_W * SCALE, ROW_H * SCALE);
-            }
+            // Don't clear immediately - text handler clears its own area
+            // This prevents flickering when clear comes but no text follows
         } else if (cmd === 'text') {
+            // Suppress signal strength text on LCD (e.g. ' -55 21')
+            if (/^\s*-\d+\s+\d+/.test(data.text || '')) {
+                return;
+            }
             const pos = unpackXY(data.x || 0, data.y || 0);
             const fontVal = data.font || 6;
             const text = data.text || '';
@@ -1272,7 +1273,9 @@ class UVK5Remote {
                 ctx.fillText(statusText, 2, 1);
             }
         } else if (cmd === 'signal') {
-            // S-meter: skip for now
+            // v1 = signal bar segments (maps to S0-S9+), v2 = secondary bar
+            const sVal = Math.max(0, Math.min(12, data.v1 || 0));
+            this.updateSMeter(sVal);
         }
     }
     
