@@ -315,11 +315,12 @@ class UVK5Radio:
             self._send_packet(QuanshengProtocol.CMD_KEY_PRESS, QuanshengProtocol.KEY_F2)
             time.sleep(0.1)
             
-            # PTT blip to activate display stream (radio sends UI packets after PTT)
-            logger.info("Activating display stream with PTT blip...")
-            self.serial.rts = False  # PTT ON (inverted)
-            time.sleep(1.0)
-            self.serial.rts = True   # PTT OFF
+            # Enter hardware mode for direct BK4819 register access
+            self._enter_hardware_mode()
+            time.sleep(0.1)
+            
+            # Read initial register state (frequency + config)
+            self._read_registers([0x38, 0x39, 0x33, 0x30, 0x31])
             time.sleep(0.2)
             
             # Start RX listener thread
@@ -427,140 +428,17 @@ class UVK5Radio:
         return None
     
     def _rx_loop(self):
-        """Background thread: single serial reader, parses both 0xABCD and 0xB5."""
-        import re
-        self._ui_lines = {}
-        buf = bytearray()
-        
+        """Background thread: continuously read and process responses."""
         while self._running and self.connected:
             try:
-                # Read raw bytes from serial
-                if not self.serial or not self.serial.is_open:
-                    time.sleep(0.1)
-                    continue
-                
-                # Non-blocking read
-                avail = self.serial.in_waiting
-                if avail > 0:
-                    buf.extend(self.serial.read(avail))
-                else:
-                    b = self.serial.read(1)
-                    if b:
-                        buf.extend(b)
-                    else:
-                        time.sleep(0.01)
-                
-                # Parse all complete packets from buffer
-                while len(buf) > 0:
-                    # Check for 0xB5 UI packet first
-                    if buf[0] == 0xB5:
-                        if len(buf) < 2:
-                            break
-                        ui_type = buf[1]
-                        
-                        # Type 6: status bar (fixed 5 bytes: B5 06 val1 val2 val3)
-                        if ui_type == 6:
-                            if len(buf) < 5:
-                                break
-                            val1, val2, val3 = buf[2], buf[3], buf[4]
-                            self._ui_lines.clear()
-                            battery_v = round(val1 * 0.04, 1)
-                            char_label = chr(val3) if val3 else ''
-                            self._emit_display_cmd('status_bar', {
-                                'char': char_label, 'battery_v': battery_v,
-                                'flags1': val1, 'flags2': val2
-                            })
-                            buf = buf[5:]
-                            continue
-                        
-                        # All other UI types: B5 type val1 val2 val3 data_len data...
-                        if len(buf) < 6:
-                            break
-                        data_len = buf[5]
-                        
-                        if ui_type in (9, 10):
-                            total = 6 + data_len
-                            if len(buf) < total:
-                                break
-                            buf = buf[total:]
-                            continue
-                        
-                        total = 6 + data_len
-                        if len(buf) < total:
-                            break
-                        
-                        val1, val2, val3 = buf[2], buf[3], buf[4]
-                        data = bytes(buf[6:6 + data_len])
-                        buf = buf[total:]
-                        
-                        if ui_type in (0, 1, 2, 3) and data_len > 0:
-                            try:
-                                text = data.decode('ascii', errors='replace').rstrip('\x00')
-                                if text:
-                                    self._emit_display_cmd('text', {
-                                        'type': ui_type, 'x': val1, 'y': val2,
-                                        'font': val3, 'text': text
-                                    })
-                                    self._ui_lines[val2] = text
-                                    try:
-                                        freq_match = re.search(r'(\d{2,3}[.,]\d{3,6})', text)
-                                        if freq_match:
-                                            freq_str = freq_match.group(1).replace(',', '.')
-                                            self._ui_text_freq = freq_str
-                                            new_freq = float(freq_str)
-                                            if 0.01 < new_freq < 1300 and abs(new_freq - self.current_freq) > 0.0001:
-                                                self.current_freq = new_freq
-                                    except (ValueError, AttributeError):
-                                        pass
-                            except Exception as e:
-                                logger.warning(f"UI text parse error: {e}")
-                        
-                        elif ui_type == 5:
-                            self._emit_display_cmd('clear_lines', {'lines': val1})
-                        elif ui_type == 7:
-                            self._emit_display_cmd('cursor', {'row': val1, 'state': val2})
-                        elif ui_type == 8:
-                            self._emit_display_cmd('signal', {'v1': val1, 'v2': val2})
-                        
-                        continue
-                    
-                    # Check for 0xABCD binary packet
-                    if len(buf) >= 2 and buf[0] == 0xAB and buf[1] == 0xCD:
-                        if len(buf) < 4:
-                            break
-                        pkt_len = buf[2] | (buf[3] << 8)
-                        total_len = 4 + pkt_len + 2
-                        if len(buf) < total_len:
-                            break
-                        packet_data = bytes(buf[:total_len])
-                        buf = buf[total_len:]
-                        try:
-                            result = QuanshengProtocol.parse_packet(packet_data)
-                            if result:
-                                cmd, params = result
-                                self._handle_response(cmd, params)
-                        except Exception:
-                            pass
-                        continue
-                    
-                    # Unknown byte - skip it
-                    buf = buf[1:]
-                
-                # Safety: prevent buffer from growing forever
-                if len(buf) > 4096:
-                    buf = buf[-512:]
-                    
+                result = self._read_response(timeout=1.0)
+                if result:
+                    cmd, params = result
+                    self._handle_response(cmd, params)
             except Exception as e:
                 if self._running:
                     logger.error(f"RX loop error: {e}")
-                time.sleep(0.1)
-    
-    def _emit_display_cmd(self, cmd_type, data):
-        """Emit a display command to all connected browsers via WebSocket."""
-        try:
-            socketio.emit('display_update', {'cmd': cmd_type, **data})
-        except Exception:
-            pass
+                eventlet.sleep(0.1)
     
     def _handle_response(self, cmd, params):
         """Handle incoming response packets."""

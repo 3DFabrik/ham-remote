@@ -1,0 +1,13 @@
+/home/elsen/ham-remote/backend/app.py:13: EventletDeprecationWarning: 
+Eventlet is deprecated. It is currently being maintained in bugfix mode, and
+we strongly recommend against using it for new projects.
+
+If you are already using Eventlet, we recommend migrating to a different
+framework.  For more detail see
+https://eventlet.readthedocs.io/en/latest/asyncio/migration.html
+
+  import eventlet
+2026-05-23 05:55:45,434 [INFO] Auth: using default credentials (admin / hamremote)
+2026-05-23 05:55:45,481 [INFO] Audio: Opus + G.711 µ-law codec initialized (16kHz mono)
+2026-05-23 05:55:45,482 [INFO] Starting HAM Remote on 0.0.0.0:8080
+2026-05-23 05:55:45,482 [INFO] HAM Remote starting on 0.0.0.0:8080

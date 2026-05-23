@@ -88,14 +88,6 @@ class UVK5Remote {
             }
         });
         
-        // LCD Display state
-        this._lcdActive = false;
-        this._lcdCtx = null;
-        
-        this.socket.on('display_update', (data) => {
-            this._handleDisplayCmd(data);
-        });
-        
         this.socket.on('audio_tx', (data) => {
             // Binary frame (ArrayBuffer) or legacy JSON
             if (data instanceof ArrayBuffer) {
@@ -552,24 +544,30 @@ class UVK5Remote {
             });
         }
         
-        // PTT - hold to talk, release to stop
-        // Using pointer events (unified mouse+touch+pen)
-        // Also prevents context menu and text selection on long press
-        pttBtn.addEventListener('pointerdown', (e) => {
+        // PTT - only works after mic is enabled
+        pttBtn.addEventListener('mousedown', (e) => {
             e.preventDefault();
-            pttBtn.setPointerCapture(e.pointerId); // ensures pointerup fires even if pointer leaves button
             this.pttOn();
         });
-        pttBtn.addEventListener('pointerup', (e) => {
+        pttBtn.addEventListener('mouseup', (e) => {
             e.preventDefault();
             this.pttOff();
         });
-        pttBtn.addEventListener('pointercancel', (e) => {
+        pttBtn.addEventListener('mouseleave', () => {
+            if (this.pttActive) this.pttOff();
+        });
+        
+        pttBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            this.pttOn();
+        });
+        pttBtn.addEventListener('touchend', (e) => {
+            e.preventDefault();
             this.pttOff();
         });
-        // Prevent context menu on long press (mobile)
-        pttBtn.addEventListener('contextmenu', (e) => {
+        pttBtn.addEventListener('touchcancel', (e) => {
             e.preventDefault();
+            this.pttOff();
         });
         
         document.addEventListener('keydown', (e) => {
@@ -1185,107 +1183,6 @@ class UVK5Remote {
         }
     }
     
-
-    // === LCD Display Rendering ===
-    _initLCD() {
-        const canvas = document.getElementById('lcd-canvas');
-        if (!canvas) return;
-        this._lcdCtx = canvas.getContext('2d');
-        this._lcdCtx.fillStyle = '#1a1a1a';
-        this._lcdCtx.fillRect(0, 0, 256, 128);
-    }
-    
-    _handleDisplayCmd(data) {
-        if (!this._lcdActive) return;
-        if (!this._lcdCtx) this._initLCD();
-        if (!this._lcdCtx) return;
-        const ctx = this._lcdCtx;
-        const cmd = data.cmd;
-        const SCALE = 2;
-        const ROW_H = 8;
-        const LCD_W = 128;
-        const LCD_H = 64;
-        function unpackXY(rawX, rawRow) {
-            let x = rawX;
-            let row = rawRow;
-            while (x >= LCD_W) { row += 1; x -= LCD_W; }
-            return { x: x * SCALE, y: (row + 1) * ROW_H * SCALE };
-        }
-        if (cmd === 'clear_screen') {
-            ctx.fillStyle = '#1a1a1a';
-            ctx.fillRect(0, 0, LCD_W * SCALE, LCD_H * SCALE);
-        } else if (cmd === 'clear_lines') {
-            const lines = data.lines || 0;
-            ctx.fillStyle = '#1a1a1a';
-            for (let i = 0; i < 8; i++) {
-                if (lines & (1 << i)) {
-                    ctx.fillRect(0, (i + 1) * ROW_H * SCALE, LCD_W * SCALE, ROW_H * SCALE);
-                }
-            }
-        } else if (cmd === 'text') {
-            const pos = unpackXY(data.x || 0, data.y || 0);
-            const fontVal = data.font || 6;
-            const text = data.text || '';
-            const type = data.type || 0;
-            const charScale = fontVal > 0 ? fontVal / 6 : 1;
-            const charH = Math.max(6, Math.round(ROW_H * charScale * SCALE));
-            const charW = Math.round(charH * 0.6);
-            const textW = text.length * charW;
-            ctx.fillStyle = '#1a1a1a';
-            ctx.fillRect(pos.x, pos.y, textW + 2, charH + 2);
-            // Preserve cursor area: redraw cursor if text overwrites it
-            if (type === 2) {
-                ctx.fillStyle = '#33ff33';
-                ctx.fillRect(pos.x, pos.y, textW + 2, charH);
-                ctx.fillStyle = '#1a1a1a';
-            } else {
-                ctx.fillStyle = '#33ff33';
-            }
-            ctx.font = 'bold ' + charH + 'px "Courier New", monospace';
-            ctx.textBaseline = 'top';
-            ctx.fillText(text, pos.x, pos.y + 1);
-        } else if (cmd === 'cursor') {
-            const row = data.row || 0;
-            const state = data.state || 0;
-            const y = (row + 1) * ROW_H * SCALE;
-            const w = 4 * SCALE;
-            const h = ROW_H * SCALE;
-            if (state === 1) {
-                ctx.fillStyle = '#33ff33';
-                ctx.fillRect(0, y, w, h);
-            } else {
-                ctx.strokeStyle = '#33ff33';
-                ctx.strokeRect(1, y + 0.5, w - 1, h - 1);
-            }
-        } else if (cmd === 'status_bar') {
-            // Render status bar in Row 0
-            ctx.fillStyle = '#1a1a1a';
-            ctx.fillRect(0, 0, LCD_W * SCALE, ROW_H * SCALE);
-            let statusText = '';
-            if (data.char) statusText += data.char + ' ';
-            if (data.battery_v) statusText += data.battery_v.toFixed(1) + 'V';
-            if (data.flags1 & 0x01) statusText += ' TX';
-            if (data.flags1 & 0x02) statusText += ' RX';
-            if (statusText) {
-                ctx.fillStyle = '#33ff33';
-                ctx.font = (ROW_H * SCALE) + 'px "Courier New", monospace';
-                ctx.textBaseline = 'top';
-                ctx.fillText(statusText, 2, 1);
-            }
-        } else if (cmd === 'signal') {
-            // S-meter: skip for now
-        }
-    }
-    
-    setLCDActive(active) {
-        this._lcdActive = active;
-        const freqSection = document.getElementById('freq-section');
-        const lcdSection = document.getElementById('lcd-section');
-        if (freqSection) freqSection.style.display = active ? 'none' : '';
-        if (lcdSection) lcdSection.style.display = active ? '' : 'none';
-        if (active && !this._lcdCtx) this._initLCD();
-    }
-
     updateFromRadio(data) {
         if (data.frequency !== undefined) {
             // Ignore stale freq updates right after user changed it
@@ -1442,8 +1339,6 @@ class UVK5Remote {
             const result = await resp.json();
             if (result.success) {
                 console.log(`Switched to ${result.label}`);
-                // Toggle LCD display for Quansheng
-                this.setLCDActive(type === "uvk5");
                 // Apply saved settings for this radio type
                 const saved = result.settings || {};
                 // Refresh ports first, then set saved port after
@@ -1542,8 +1437,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (rt) rt.value = settings.radio_type;
             const rtMain = document.getElementById('radio-type-main');
             if (rtMain) rtMain.value = settings.radio_type;
-            // Toggle LCD display for Quansheng
-            hamRemote.setLCDActive(settings.radio_type === "uvk5");
         }
     }).catch(() => {});
 });
