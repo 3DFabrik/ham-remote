@@ -762,24 +762,15 @@ class UVK5Radio:
         return True
     
     def set_ptt(self, active):
-        """Key/unkey PTT via BK4819 GPIO register."""
+        """Key/unkey PTT via RTS line (avoids eventlet/thread serial conflict)."""
         if not self.connected:
             return False
         self.ptt_active = active
-        if self.hw_mode:
-            # BK4819 register 0x33 bit 6 controls TX
-            if active:
-                self._reg_33 |= (1 << 6)  # Set TX bit
-            else:
-                self._reg_33 &= ~(1 << 6)  # Clear TX bit
-            self._write_registers([(0x33, self._reg_33)])
-        else:
-            # Fallback: use KeyPress for PTT
-            if active:
-                self._send_packet(QuanshengProtocol.CMD_KEY_PRESS, QuanshengProtocol.KEY_F1)
-            else:
-                self._send_packet(QuanshengProtocol.CMD_KEY_PRESS, QuanshengProtocol.KEY_EXIT)
-        logger.info(f"PTT {'ON' if active else 'OFF'}")
+        try:
+            self.serial.rts = not active  # RTS inverted: False=PTT ON, True=PTT OFF
+            logger.info(f"PTT {'ON' if active else 'OFF'} (RTS)")
+        except Exception as e:
+            logger.error(f"PTT RTS error: {e}")
         return True
     
     def set_squelch(self, level):
