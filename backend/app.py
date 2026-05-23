@@ -1789,37 +1789,43 @@ class AudioStreamManager:
         if not self.tx_active:
             return
         try:
-            import base64
-            import numpy as np
+            import base64 as _b64
             
-            opus_data = base64.b64decode(data.get('data', ''))
-            if not opus_data:
+            raw = _b64.b64decode(data.get('data', ''))
+            if not raw:
                 return
             
-            # Decode Opus → PCM
-            pcm = self.opus_decoder.decode(opus_data, self.FRAME_SIZE)
+            codec = data.get('codec', 'opus-webm')
+            if codec == 'pcm':
+                pcm = raw  # Already PCM Int16
+            else:
+                pcm = self.opus_decoder.decode(raw, self.FRAME_SIZE)
             
-            # Play to sound card
+            # Queue PCM for writer thread (bypasses eventlet)
             if audio_playback_dev:
-                # Write PCM to aplay subprocess
-                if not hasattr(self, '_playback_proc') or self._playback_proc is None:
-                    cmd = [
-                        'aplay',
-                        '-D', audio_playback_dev,
-                        '-f', 'S16_LE',
-                        '-c', '1',
-                        '-r', str(self.SAMPLE_RATE),
-                        '-t', 'raw'
-                    ]
-                    self._playback_proc = subprocess.Popen(
-                        cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE
-                    )
-                try:
-                    self._playback_proc.stdin.write(pcm)
-                    self._playback_proc.stdin.flush()
-                except BrokenPipeError:
-                    logger.warning("aplay pipe broken, restarting")
-                    self._playback_proc = None
+                if not hasattr(self, '_tx_queue'):
+                    import queue as _queue
+                    self._tx_queue = _queue.Queue()
+                    import threading
+                    def _aplay_writer():
+                        proc = None
+                        while True:
+                            try:
+                                chunk = self._tx_queue.get(timeout=5)
+                                if chunk is None:
+                                    break
+                                if proc is None or proc.poll() is not None:
+                                    proc = subprocess.Popen(
+                                        ['aplay', '-D', audio_playback_dev, '-f', 'S16_LE', '-c', '1', '-r', str(self.SAMPLE_RATE), '-t', 'raw'],
+                                        stdin=subprocess.PIPE, stderr=subprocess.DEVNULL
+                                    )
+                                proc.stdin.write(chunk)
+                                proc.stdin.flush()
+                            except Exception:
+                                proc = None
+                    self._tx_thread = threading.Thread(target=_aplay_writer, daemon=True)
+                    self._tx_thread.start()
+                self._tx_queue.put(pcm)
         except Exception as e:
             logger.error(f"TX audio error: {e}")
     

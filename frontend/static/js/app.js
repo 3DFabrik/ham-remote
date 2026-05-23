@@ -591,30 +591,36 @@ class UVK5Remote {
         this.els.pttButton.classList.add('active');
         this._log('[PTT] TX on, micReady=' + this._micReady + ', stream=' + !!this.micStream);
         
-        // Start recording from already-open mic stream
+        // Start recording from already-open mic stream - raw PCM via AudioContext
         try {
-            this._log('[PTT] creating MediaRecorder...');
-            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-                ? 'audio/webm;codecs=opus' : 'audio/ogg;codecs=opus';
-            this._log('[PTT] mimeType: ' + mimeType);
-            this._log('[PTT] micStream: ' + this.micStream.getTracks().length + ' tracks, active=' + this.micStream.active);
-            this.mediaRecorder = new MediaRecorder(this.micStream, { mimeType, audioBitsPerSecond: 24000 });
-            this._log('[PTT] MediaRecorder state: ' + this.mediaRecorder.state);
-            this.mediaRecorder.ondataavailable = (e) => {
-                if (e.data.size > 0 && this.pttActive) {
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                        this.socket.emit('audio_rx', {
-                            data: reader.result.split(',')[1],
-                            codec: 'opus-webm',
-                            sampleRate: 16000
-                        });
-                    };
-                    reader.readAsDataURL(e.data);
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            const source = audioCtx.createMediaStreamSource(this.micStream);
+            const processor = audioCtx.createScriptProcessor(2048, 1, 1);
+            this._pttAudioCtx = audioCtx;
+            this._pttProcessor = processor;
+            this._pttSource = source;
+            source.connect(processor);
+            processor.connect(audioCtx.destination);
+            processor.onaudioprocess = (e) => {
+                if (!this.pttActive) return;
+                const float32 = e.inputBuffer.getChannelData(0);
+                // Convert Float32 → Int16 PCM
+                const int16 = new Int16Array(float32.length);
+                for (let i = 0; i < float32.length; i++) {
+                    const s = Math.max(-1, Math.min(1, float32[i]));
+                    int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                 }
+                // Base64 encode the PCM bytes
+                const bytes = new Uint8Array(int16.buffer);
+                let binary = '';
+                for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+                this.socket.emit('audio_rx', {
+                    data: btoa(binary),
+                    codec: 'pcm',
+                    sampleRate: 16000
+                });
             };
-            this.mediaRecorder.start(20);
-            this._log('[PTT] recording started');
+            this._log('[PTT] PCM recording started');
         } catch (err) {
             this._log('[PTT] ERROR: ' + err.name + ': ' + err.message);
         }
