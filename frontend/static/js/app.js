@@ -610,17 +610,35 @@ class UVK5Remote {
                     const s = Math.max(-1, Math.min(1, float32[i]));
                     int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                 }
-                // Base64 encode the PCM bytes
-                const bytes = new Uint8Array(int16.buffer);
-                let binary = '';
-                for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-                this.socket.emit('audio_rx', {
-                    data: btoa(binary),
-                    codec: 'pcm',
-                    sampleRate: 16000
-                });
+                
+                const selectedCodec = this.els.audioCodec?.value || 'g711';
+                
+                if (selectedCodec === 'g711') {
+                    // G.711 µ-law encoding
+                    const ulawBytes = new Uint8Array(int16.length);
+                    for (let i = 0; i < int16.length; i++) {
+                        ulawBytes[i] = UVK5Remote._ulawEncode(int16[i]);
+                    }
+                    let binary = '';
+                    for (let i = 0; i < ulawBytes.length; i++) binary += String.fromCharCode(ulawBytes[i]);
+                    this.socket.emit('audio_rx', {
+                        data: btoa(binary),
+                        codec: 'g711',
+                        sampleRate: 16000
+                    });
+                } else {
+                    // Raw PCM
+                    const bytes = new Uint8Array(int16.buffer);
+                    let binary = '';
+                    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+                    this.socket.emit('audio_rx', {
+                        data: btoa(binary),
+                        codec: 'pcm',
+                        sampleRate: 16000
+                    });
+                }
             };
-            this._log('[PTT] PCM recording started');
+            this._log('[PTT] recording started (' + (this.els.audioCodec?.value || 'g711') + ')');
         } catch (err) {
             this._log('[PTT] ERROR: ' + err.name + ': ' + err.message);
         }
@@ -775,6 +793,27 @@ class UVK5Remote {
         if (!UVK5Remote._ULAW_DECODE) UVK5Remote._ULAW_DECODE = UVK5Remote._buildUlawTable();
         return UVK5Remote._ULAW_DECODE[byte];
     }
+    
+    static _ULAW_ENCODE = null;
+    
+    static _buildUlawEncodeTable() {
+        // Build reverse lookup: Int16 value → µ-law byte
+        // Use segmentation for speed (same algorithm as ITU-T G.711)
+        const table = new Uint8Array(65536);  // full Int16 range
+        for (let i = 0; i < 256; i++) {
+            const decoded = UVK5Remote._ulawDecode(i);
+            // Map signed Int16 to unsigned index
+            const idx = decoded < 0 ? decoded + 65536 : decoded;
+            table[idx] = i;
+        }
+        return table;
+    }
+    
+    static _ulawEncode(sample) {
+        if (!UVK5Remote._ULAW_ENCODE) UVK5Remote._ULAW_ENCODE = UVK5Remote._buildUlawEncodeTable();
+        const idx = sample < 0 ? sample + 65536 : sample;
+        return UVK5Remote._ULAW_ENCODE[idx];
+    }
 
     processRxAudio(data) {
         if (!this.audioContext) {
@@ -786,22 +825,7 @@ class UVK5Remote {
         try {
             let float32Array = null;
             
-            if (data.codec === 'opus') {
-                const binary = atob(data.data);
-                const bytes = new Uint8Array(binary.length);
-                for (let i = 0; i < binary.length; i++) {
-                    bytes[i] = binary.charCodeAt(i);
-                }
-                
-                if (this.opusDecoder) {
-                    const result = this.opusDecoder.decodeFrame(bytes);
-                    const audio = result.channelData ? result.channelData[0] : result;
-                    if (audio && audio.length > 0) {
-                        this._playAndAnalyzeRx(audio);
-                    }
-                    return;
-                }
-            } else if (data.codec === 'pcm') {
+            if (data.codec === 'pcm') {
                 const binary = atob(data.data);
                 const bytes = new Uint8Array(binary.length);
                 for (let i = 0; i < binary.length; i++) {
@@ -893,7 +917,6 @@ class UVK5Remote {
     
     setupTestTone() {
         const btnPcm = document.getElementById('btn-test-tone-pcm');
-        const btnOpus = document.getElementById('btn-test-tone-opus');
         const status = document.getElementById('test-tone-status');
         
         this._testToneActive = false;
@@ -911,7 +934,7 @@ class UVK5Remote {
             this._testToneActive = true;
             this._testToneCodec = codec;
             btn.classList.add('active');
-            if (status) status.textContent = `440Hz, 8kHz ${codec.toUpperCase()}`;
+            if (status) status.textContent = `440Hz ${codec.toUpperCase()}`;
         };
         
         const stopTone = () => {
@@ -919,7 +942,6 @@ class UVK5Remote {
             this._testToneActive = false;
             this._testToneCodec = null;
             if (btnPcm) btnPcm.classList.remove('active');
-            if (btnOpus) btnOpus.classList.remove('active');
             if (status) status.textContent = '';
         };
         
@@ -930,16 +952,6 @@ class UVK5Remote {
                     if (this._testToneCodec === 'pcm') return;
                 }
                 startTone('pcm', btnPcm);
-            });
-        }
-        
-        if (btnOpus) {
-            btnOpus.addEventListener('click', () => {
-                if (this._testToneActive) {
-                    stopTone();
-                    if (this._testToneCodec === 'opus') return;
-                }
-                startTone('opus', btnOpus);
             });
         }
     }
@@ -1017,28 +1029,8 @@ class UVK5Remote {
         // Audio streaming state
         this.micStream = null;
         this.mediaRecorder = null;
-        this.opusDecoder = null;
         this.rxAudioQueue = [];
         this.rxPlaying = false;
-        
-        this._initOpusDecoder();
-    }
-    
-    async _initOpusDecoder() {
-        try {
-            // opus-decoder UMD exports to window["opus-decoder"].OpusDecoder
-            const OpusDecoderClass = (window['opus-decoder'] && window['opus-decoder'].OpusDecoder)
-                || (typeof OpusDecoder !== 'undefined' ? OpusDecoder : null);
-            if (OpusDecoderClass) {
-                this.opusDecoder = new OpusDecoderClass({ sampleRate: 16000, channels: 1 });
-                await this.opusDecoder.ready;
-                console.log('Opus decoder initialized (8kHz mono)');
-            } else {
-                console.warn('Opus decoder library not loaded, RX will use PCM fallback');
-            }
-        } catch (err) {
-            console.warn('Opus decoder init failed:', err);
-        }
     }
     
     async refreshPorts() {
@@ -1398,7 +1390,7 @@ class UVK5Remote {
     async setAudioConfig() {
         const playback = this.els.audioPlayback.value;
         const capture = this.els.audioCapture.value;
-        const codec = this.els.audioCodec?.value || 'opus';
+        const codec = this.els.audioCodec?.value || 'g711';
         
         try {
             await fetch('/api/audio/config', {

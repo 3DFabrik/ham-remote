@@ -6,7 +6,7 @@ Control Yaesu, Quansheng, and other radios from a web browser.
 Architecture:
 - Flask web server with WebSocket support (flask-socketio)
 - Serial communication with UV-K5 via AIOC
-- Audio streaming via WebSocket (opus encoded)
+- Audio streaming via WebSocket (G.711 µ-law / PCM)
 - PTT control via serial/CAT commands
 """
 
@@ -1424,7 +1424,7 @@ def api_get_settings():
 # Active audio devices
 audio_playback_dev = os.environ.get('AUDIO_PLAYBACK', None)
 audio_capture_dev = os.environ.get('AUDIO_CAPTURE', None)
-audio_codec = 'opus'  # 'opus' or 'pcm'
+audio_codec = 'g711'  # 'g711' or 'pcm'
 
 # Restore audio settings from per-radio config
 _saved = _load_radio_settings(current_radio_type)
@@ -1696,7 +1696,7 @@ def api_audio_config():
         audio_playback_dev = data['playback']
     if 'capture' in data:
         audio_capture_dev = data['capture']
-    if 'codec' in data and data['codec'] in ('opus', 'pcm', 'g711'):
+    if 'codec' in data and data['codec'] in ('pcm', 'g711'):
         audio_codec = data['codec']
 
     logger.info(f"Audio config: playback={audio_playback_dev}, capture={audio_capture_dev}, codec={audio_codec}")
@@ -1734,18 +1734,17 @@ def api_audio_rx_stop():
 
 # ============================================================
 # Audio Stream Manager
-# WebSocket + Opus, 16kHz Mono
+# WebSocket + G.711 µ-law / PCM, 16kHz Mono
 # ============================================================
 
 class AudioStreamManager:
     """Manages bidirectional audio streaming between browser and sound card.
-    Uses Opus codec: 16kHz mono, 20ms frames. Also supports PCM and G.711 µ-law."""
-    
-    _ULAW_DECODE_TABLE = None  # Not needed, using audioop
+    Uses G.711 µ-law codec by default (8-bit, 50% bandwidth savings over PCM).
+    Also supports raw PCM as fallback."""
     
     SAMPLE_RATE = 16000
     CHANNELS = 1
-    FRAME_SIZE = 320  # 20ms @ 16kHz = 320 samples (Opus only supports 2.5/5/10/20/40/60ms)
+    FRAME_SIZE = 320  # 20ms @ 16kHz = 320 samples
     FRAME_BYTES = 640  # 320 samples * 2 bytes (16-bit)
     # Send larger chunks to reduce WebSocket overhead
     CHUNK_FRAMES = 4  # 4 frames = 80ms per chunk
@@ -1760,12 +1759,7 @@ class AudioStreamManager:
         self._running = False
         self.rx_gain = 1.0  # RX audio gain multiplier (0.0 - 2.0, default 1.0)
         
-        # Opus encoder for RX (radio → browser)
-        import opuslib
-        self.opus_encoder = opuslib.Encoder(self.SAMPLE_RATE, self.CHANNELS, opuslib.APPLICATION_VOIP)
-        self.opus_decoder = opuslib.Decoder(self.SAMPLE_RATE, self.CHANNELS)
-        
-        logger.info("Audio: Opus + G.711 µ-law codec initialized (16kHz mono)")
+        logger.info("Audio: G.711 µ-law + PCM codec initialized (16kHz mono)")
     
     def start_tx(self):
         """Start TX: prepare to receive mic audio from browser."""
@@ -1785,21 +1779,23 @@ class AudioStreamManager:
         return audioop.lin2ulaw(pcm_data, 2)  # 2 bytes per sample
     
     def handle_tx_audio(self, data):
-        """Handle incoming Opus audio from browser, decode and play to sound card."""
+        """Handle incoming audio from browser, decode and play to sound card."""
         if not self.tx_active:
             return
         try:
             import base64 as _b64
+            import audioop
             
             raw = _b64.b64decode(data.get('data', ''))
             if not raw:
                 return
             
-            codec = data.get('codec', 'opus-webm')
-            if codec == 'pcm':
-                pcm = raw  # Already PCM Int16
+            codec = data.get('codec', 'g711')
+            if codec == 'g711':
+                # G.711 µ-law → PCM Int16
+                pcm = audioop.ulaw2lin(raw, 2)  # 2 bytes per sample
             else:
-                pcm = self.opus_decoder.decode(raw, self.FRAME_SIZE)
+                pcm = raw  # Already PCM Int16
             
             # Queue PCM for writer thread (bypasses eventlet)
             if audio_playback_dev:
@@ -1837,7 +1833,7 @@ class AudioStreamManager:
             self._running = True
             self._capture_thread = threading.Thread(target=self._rx_capture_loop, daemon=True)
             self._capture_thread.start()
-            logger.info("Audio RX stream started (Opus)")
+            logger.info("Audio RX stream started")
     
     def stop_rx_stream(self, client_sid):
         """Stop streaming to a specific client."""
@@ -1891,18 +1887,15 @@ class AudioStreamManager:
                                         'sampleRate': self.SAMPLE_RATE
                                     }, room=sid)
                             else:
-                                # Opus mode: encode each frame individually
-                                num_frames = len(pcm_chunk) // self.FRAME_BYTES
-                                for i in range(num_frames):
-                                    pcm_frame = pcm_chunk[i * self.FRAME_BYTES:(i + 1) * self.FRAME_BYTES]
-                                    opus_data = self.opus_encoder.encode(pcm_frame, self.FRAME_SIZE)
-                                    encoded = base64.b64encode(opus_data).decode()
-                                    for sid in list(self.rx_clients):
-                                        socketio.emit('audio_tx', {
-                                            'data': encoded,
-                                            'codec': 'opus',
-                                            'sampleRate': self.SAMPLE_RATE
-                                        }, room=sid)
+                                # Default: G.711 µ-law
+                                ulaw_data = self._pcm_to_ulaw(pcm_chunk)
+                                encoded = base64.b64encode(ulaw_data).decode()
+                                for sid in list(self.rx_clients):
+                                    socketio.emit('audio_tx', {
+                                        'data': encoded,
+                                        'codec': 'g711',
+                                        'sampleRate': self.SAMPLE_RATE
+                                    }, room=sid)
                     
                     if self._capture_process.poll() is not None:
                         # Force-kill and wait to free the audio device
@@ -1934,10 +1927,69 @@ class AudioStreamManager:
             self._playback_proc = None
 
 
+def _cleanup_audio_processes():
+    """Kill all stray arecord/aplay processes to free audio devices."""
+    try:
+        subprocess.run(['pkill', '-9', '-u', os.environ.get('USER', 'df7zz'), 'arecord'],
+                       capture_output=True, timeout=2)
+        subprocess.run(['pkill', '-9', '-u', os.environ.get('USER', 'df7zz'), 'aplay'],
+                       capture_output=True, timeout=2)
+        logger.info("Audio cleanup: killed stray arecord/aplay processes")
+    except Exception as e:
+        logger.warning(f"Audio cleanup error: {e}")
+
+
+def _on_connect_cleanup():
+    """Reset audio state on new client connect to avoid stale processes."""
+    global audio_stream_manager
+    if audio_stream_manager:
+        # Kill any lingering audio subprocesses
+        _cleanup_audio_processes()
+        # Reset RX state so it starts fresh
+        audio_stream_manager.rx_active = False
+        audio_stream_manager._running = False
+        audio_stream_manager.rx_clients.clear()
+        if audio_stream_manager._capture_process and audio_stream_manager._capture_process.poll() is None:
+            try:
+                audio_stream_manager._capture_process.terminate()
+            except Exception:
+                pass
+            audio_stream_manager._capture_process = None
+        # Reset TX state
+        audio_stream_manager.tx_active = False
+        if hasattr(audio_stream_manager, '_tx_queue'):
+            # Drain the queue
+            while not audio_stream_manager._tx_queue.empty():
+                try:
+                    audio_stream_manager._tx_queue.get_nowait()
+                except Exception:
+                    break
+        logger.info("Audio state reset for new client connection")
+
+
+import signal as _signal
+
+def _sigterm_handler(signum, frame):
+    """Clean up child processes on SIGTERM/SIGINT."""
+    logger.info("Received shutdown signal, cleaning up...")
+    _cleanup_audio_processes()
+    if audio_stream_manager:
+        if audio_stream_manager._capture_process:
+            try:
+                audio_stream_manager._capture_process.terminate()
+            except Exception:
+                pass
+    import os as _os
+    _os._exit(0)
+
+_signal.signal(_signal.SIGTERM, _sigterm_handler)
+_signal.signal(_signal.SIGINT, _sigterm_handler)
+
+
 try:
     audio_stream_manager = AudioStreamManager()
 except Exception as e:
-    logger.warning(f"Audio: Opus not available, audio features disabled ({e})")
+    logger.warning(f"Audio: stream manager init failed ({e})")
     audio_stream_manager = None
 
 
@@ -1949,6 +2001,7 @@ def ws_connect():
         logger.warning(f"WebSocket connect rejected (not authenticated): {request.sid}")
         return False  # Reject connection
     logger.info(f"WebSocket client connected: {request.sid}")
+    _on_connect_cleanup()
     emit('radio_update', radio.get_status())
 
 
@@ -2033,8 +2086,7 @@ def ws_set_mode(data):
 @socketio.on('audio_rx')
 def ws_audio_rx(data):
     """Receive audio from browser microphone and forward to playback device."""
-    # Audio data comes as base64-encoded opus frames
-    # Forward to the selected playback device (radio's audio input)
+    # Audio data comes as base64-encoded G.711/PCM frames
     if audio_stream_manager and audio_stream_manager.tx_active:
         audio_stream_manager.handle_tx_audio(data)
 
@@ -2082,15 +2134,16 @@ def ws_disconnect():
 # No Opus, no base64 – pure binary WebSocket for minimal latency
 # ============================================================
 
-_test_tone_clients = {}  # sid -> {'codec': 'pcm'|'opus'}
+_test_tone_clients = {}  # sid -> {'codec': 'pcm'|'g711'}
 _test_tone_thread = None
 
 
 def _test_tone_loop():
-    """Generate 440Hz sine wave and stream via WebSocket (PCM or Opus per client)."""
+    """Generate 440Hz sine wave and stream via WebSocket (PCM or G.711 per client)."""
     import struct
     import math
     import base64
+    import audioop
     
     SAMPLE_RATE = 16000
     FREQ = 440  # 440 Hz (Kammerton A)
@@ -2105,19 +2158,10 @@ def _test_tone_loop():
         for i in range(period_samples)
     ])
     
-    # Try to init Opus encoder
-    opus_encoder = None
-    try:
-        import opuslib
-        opus_encoder = opuslib.Encoder(SAMPLE_RATE, 1, opuslib.APPLICATION_VOIP)
-        logger.info("Test tone: Opus encoder available")
-    except Exception as e:
-        logger.warning(f"Test tone: Opus not available ({e}), opus mode will fail")
-    
-    logger.info("Test tone: started (440Hz, 8kHz mono, 20ms frames, pre-computed)")
+    logger.info("Test tone: started (440Hz, 16kHz mono, 20ms frames)")
     
     pos = 0  # Position in lookup table (in bytes)
-    frame_bytes = FRAME_SAMPLES * 2  # 320 bytes per frame (160 samples * 2)
+    frame_bytes = FRAME_SAMPLES * 2  # 640 bytes per frame (320 samples * 2)
     
     # Use wall-clock timing to avoid drift
     next_send = time.monotonic()
@@ -2133,29 +2177,17 @@ def _test_tone_loop():
             frame_pcm = lookup[pos:] + lookup[:frame_bytes - remaining]
             pos = frame_bytes - remaining
         
-        # Encode Opus frame once (if any client needs it)
-        opus_frame = None
-        opus_clients = [sid for sid, cfg in list(_test_tone_clients.items()) if cfg.get('codec') == 'opus']
-        if opus_clients and opus_encoder:
-            try:
-                opus_frame = opus_encoder.encode(frame_pcm, FRAME_SAMPLES)
-            except Exception as e:
-                logger.error(f"Test tone: Opus encode error: {e}")
-        
         # Send to all clients in their requested format
         for sid, cfg in list(_test_tone_clients.items()):
             try:
-                if cfg.get('codec') == 'opus':
-                    if opus_frame:
-                        encoded = base64.b64encode(opus_frame).decode()
-                        socketio.emit('audio_tx', {
-                            'data': encoded,
-                            'codec': 'opus',
-                            'sampleRate': SAMPLE_RATE
-                        }, room=sid)
-                    elif not opus_encoder:
-                        # Fallback: tell client Opus unavailable, send PCM
-                        socketio.emit('audio_tx', frame_pcm, room=sid)
+                if cfg.get('codec') == 'g711':
+                    ulaw_data = audioop.lin2ulaw(frame_pcm, 2)
+                    encoded = base64.b64encode(ulaw_data).decode()
+                    socketio.emit('audio_tx', {
+                        'data': encoded,
+                        'codec': 'g711',
+                        'sampleRate': SAMPLE_RATE
+                    }, room=sid)
                 else:
                     # Raw PCM binary
                     socketio.emit('audio_tx', frame_pcm, room=sid)
